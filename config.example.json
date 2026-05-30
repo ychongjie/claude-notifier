@@ -1,0 +1,43 @@
+{
+  "dingtalk": {
+    "openConversationId": "cidkHX710+lPK4azBGUDnQiMw==",
+    "userId": "chongjie.yuan",
+    "userDisplayName": "袁崇杰",
+    "dwsBin": "dws",
+    "pushTitlePrefix": "[CN]"
+  },
+  "poll": {
+    "intervalMs": 2000,
+    "overlapSlackMs": 5000,
+    "listLimit": 20,
+    "processedIdsMax": 500
+  },
+  "hookServer": {
+    "host": "127.0.0.1",
+    "port": 8787
+  },
+  "tmux": {
+    "sendKeysEnterDelayMs": 150,
+    "paneOverride": null
+  },
+  "emojis": {
+    "candidates": ["1", "2", "3"]
+  },
+  "options": {
+    "minCount": 2,
+    "maxCount": 3,
+    "retryOnInvalid": 1
+  },
+  "timeouts": {
+    "generationMs": 60000,
+    "userWaitMs": 1800000,
+    "cooldownMs": 1500
+  },
+  "paths": {
+    "logFile": "~/.claude-notifier/daemon.log",
+    "stateFile": "~/.claude-notifier/state.json"
+  },
+  "metaPrompt": {
+    "sentinelPrefix": "CN_OPTIONS_"
+  }
+}

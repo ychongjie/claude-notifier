@@ -1,0 +1,27 @@
+{
+  "name": "claude-notifier",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "用手机钉钉远程轻量驱动本地 Mac 上的 Claude Code session",
+  "bin": {
+    "claude-notifier": "src/index.ts"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts start",
+    "cli": "tsx src/index.ts",
+    "smoke": "tsx src/smoke.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "tsx": "^4.19.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
