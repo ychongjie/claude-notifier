@@ -38,6 +38,11 @@ export class TmuxClient {
     await this.run(['send-keys', '-t', pane, 'Enter']);
   }
 
+  /** 向 pane 发送一个 tmux 按键名（如 Enter / Escape），非字面文本。用于菜单选择。 */
+  async sendKey(pane: PaneId, key: string): Promise<void> {
+    await this.run(['send-keys', '-t', pane, key]);
+  }
+
   /** 抓取 pane 当前可见内容（调试用）。 */
   async capturePane(pane: PaneId): Promise<string> {
     return this.run(['capture-pane', '-p', '-t', pane]);

@@ -66,6 +66,16 @@ npm run cli -- install-service          # 安装并启动 launchd 常驻服务
 
 > 不在 tmux 里运行的 Claude 会话**不会**推送(无法遥控,避免无意义打扰)。
 
+### 工具授权(允许/拒绝)
+
+非 auto 模式下,Claude 中途需要工具授权(`permission_prompt`)时,锁屏的话会推送一条 `[CN] 需要授权 #...`,列出 `1) 允许 2) 拒绝`。点表情即可:
+- **允许** → 发送 `Enter`(确认弹窗高亮的默认项 Yes)
+- **拒绝** → 发送 `Escape`(取消 = No)
+
+按键可在 `config.json` 的 `permission.allowKey` / `denyKey` 调整,可用 `permission.enabled:false` 关闭。
+
+> ⚠️ **安全提示**:首次使用前请用一个真实权限弹窗验证"拒绝"确实拒绝了(见下)。不同 Claude Code 版本菜单若有差异,改 `denyKey` 即可。
+
 ## 命令
 
 ```bash

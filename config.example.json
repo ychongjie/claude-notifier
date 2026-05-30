@@ -43,6 +43,11 @@
   "notify": {
     "onlyWhenLocked": true
   },
+  "permission": {
+    "enabled": true,
+    "allowKey": "Enter",
+    "denyKey": "Escape"
+  },
   "safety": {
     "maxGenerationsPerWindow": 8,
     "windowMs": 300000

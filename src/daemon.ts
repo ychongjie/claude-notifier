@@ -49,9 +49,12 @@ export class Daemon {
   }
 
   private onHook(h: IncomingHook): void {
-    // 只在 Claude 真正结束一轮、等人介入时触发：
-    //   Stop（立即）/ Notification idle_prompt（锁屏时 60s 兜底）。
-    // 不处理 permission_prompt（轮次中途等工具授权，不适合 meta-prompt 流程）。
+    // 工具授权弹窗：推送允许/拒绝，注入对应按键。
+    if (h.event === 'Notification' && h.notificationType === 'permission_prompt') {
+      void this.sessions.onPermissionPrompt(h);
+      return;
+    }
+    // Claude 真正结束一轮、等人介入时触发：Stop（立即）/ idle_prompt（锁屏 60s 兜底）。
     const isIdle =
       h.event === 'Stop' ||
       (h.event === 'Notification' && (h.notificationType === 'idle_prompt' || h.notificationType == null));

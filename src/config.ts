@@ -53,6 +53,15 @@ export const ConfigSchema = z.object({
       onlyWhenLocked: z.boolean().default(true),
     })
     .default({}),
+  permission: z
+    .object({
+      // 处理工具授权弹窗：推送"允许/拒绝"到手机，点选后注入对应按键。
+      enabled: z.boolean().default(true),
+      // tmux 按键名：允许=确认高亮默认项(Yes)，拒绝=取消(No)。如真实菜单不同可改。
+      allowKey: z.string().default('Enter'),
+      denyKey: z.string().default('Escape'),
+    })
+    .default({}),
   safety: z
     .object({
       // 熔断器：单会话在 windowMs 内最多注入这么多次 meta-prompt，超出则降级为固定选项（不再生成，防 token 失控）。

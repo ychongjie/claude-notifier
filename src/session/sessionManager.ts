@@ -111,6 +111,40 @@ export class SessionManager {
     await this.startOptionGeneration(rec, info.assistantTurns);
   }
 
+  /** 处理工具授权弹窗：推送「允许/拒绝」，点选后发送对应按键。 */
+  async onPermissionPrompt(h: IncomingHook): Promise<void> {
+    if (!this.cfg.permission.enabled) return;
+    const rec = this.get(h.sessionId);
+    if (h.pane) rec.pane = h.pane;
+    const sid = h.sessionId.slice(0, 8);
+
+    // 无 pane 无法操作菜单 → 跳过。
+    if (!rec.pane || !(await this.tmux.hasPane(rec.pane))) {
+      this.log.debug('权限弹窗但无可用 pane，跳过', { session: sid });
+      return;
+    }
+    // 仅锁屏时介入。
+    if (this.cfg.notify.onlyWhenLocked) {
+      const locked = await isScreenLocked();
+      if (locked === false) {
+        this.log.debug('屏幕未锁，权限弹窗交给本机处理', { session: sid });
+        return;
+      }
+    }
+    // 取消任何进行中的选项生成（权限优先），用固定的允许/拒绝选项推送。
+    this.clearGen(rec);
+    const optionSet: OptionSet = {
+      summary: '需要工具授权：' + (h.message?.trim() || 'Claude 请求执行一个需要确认的操作'),
+      options: [
+        { key: '1', label: '允许', injectText: 'allow', keys: this.cfg.permission.allowKey },
+        { key: '2', label: '拒绝', injectText: 'deny', keys: this.cfg.permission.denyKey },
+      ],
+    };
+    const info = readTranscript(h.transcriptPath);
+    this.log.info('收到权限弹窗，推送允许/拒绝', { session: sid, message: optionSet.summary.slice(0, 80) });
+    await this.pushAndWait(rec, optionSet, info.assistantTurns, 'permission');
+  }
+
   /** 注入 meta-prompt，让 Claude 自吐结构化选项。 */
   private async startOptionGeneration(rec: SessionRecord, turns: number): Promise<void> {
     const sid = rec.sessionId.slice(0, 8);
@@ -204,11 +238,16 @@ export class SessionManager {
     await this.pushAndWait(rec, FALLBACK_OPTIONS, rec.genTurns ?? 0);
   }
 
-  private async pushAndWait(rec: SessionRecord, optionSet: OptionSet, turns: number): Promise<void> {
+  private async pushAndWait(
+    rec: SessionRecord,
+    optionSet: OptionSet,
+    turns: number,
+    kind: 'options' | 'permission' = 'options',
+  ): Promise<void> {
     this.clearGen(rec); // 离开 GENERATING_OPTIONS
     const marker = `CN-${rec.sessionId.slice(0, 8)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
     try {
-      await pushOptions(this.dws, this.cfg, { sessionId: rec.sessionId, optionSet, marker });
+      await pushOptions(this.dws, this.cfg, { sessionId: rec.sessionId, optionSet, marker, kind });
     } catch (err) {
       this.log.error('推送选项失败', { err: String(err) });
       return;
@@ -282,8 +321,14 @@ export class SessionManager {
     rec.genTimes = []; // 用户成功介入 → 重置熔断计数
     this.clearWait(rec);
     try {
-      await this.tmux.injectLine(rec.pane, option.injectText, this.cfg.tmux.sendKeysEnterDelayMs);
-      this.log.info('已注入选项', { session: sessionId.slice(0, 8), pane: rec.pane, choice: option.key, desc });
+      if (option.keys) {
+        // 权限菜单：发送按键名（如 Enter/Escape）而非字面文本。
+        await this.tmux.sendKey(rec.pane, option.keys);
+        this.log.info('已发送授权按键', { session: sessionId.slice(0, 8), pane: rec.pane, choice: option.key, keys: option.keys, desc });
+      } else {
+        await this.tmux.injectLine(rec.pane, option.injectText, this.cfg.tmux.sendKeysEnterDelayMs);
+        this.log.info('已注入选项', { session: sessionId.slice(0, 8), pane: rec.pane, choice: option.key, desc });
+      }
     } catch (err) {
       this.log.error('注入失败', { err: String(err) });
       rec.state = 'IDLE';

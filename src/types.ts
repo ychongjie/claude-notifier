@@ -8,12 +8,14 @@ export type PaneId = string;
 
 /** 一个被推送给用户的选项。 */
 export interface Option {
-  /** "1".."3"，与表情/数字回复对应。 */
+  /** "1".."5"，与表情回复对应。 */
   key: string;
   /** 简短标签，展示用。 */
   label: string;
-  /** 被选中时原样注入到 session 的文本。 */
+  /** 被选中时原样注入到 session 的文本（普通选项）。 */
   injectText: string;
+  /** 若设置，则改为向 pane 发送该 tmux 按键名（如 Enter/Escape），用于权限菜单的允许/拒绝。 */
+  keys?: string;
 }
 
 /** 一轮要推送的选项集合（meta-prompt 产物，或固定兜底）。 */

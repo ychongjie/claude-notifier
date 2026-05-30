@@ -52,7 +52,7 @@ src/service/launchd.ts           # LaunchAgent plist 生成与加载
 2. **只认表情 reaction**,不处理文本回复(挂在具体消息上 → 天然归属会话,无多会话歧义)。表情名 = 选项 key。
 3. **锁屏门控**:`notify.onlyWhenLocked` 时未锁不推。新增推送路径都要走这个门控。
 4. **sentinel 关联**:每轮 meta-prompt 用唯一 sentinel;靠它在 transcript 多条 assistant 文本里定位本轮产出(防错配、防刷盘竞态)。
-5. **触发只用 Stop(+idle_prompt 兜底)**,不要加回 `permission_prompt`。
+5. **选项生成只在 Stop(+idle_prompt 兜底)**;`permission_prompt` 走**独立路径**(`onPermissionPrompt`):不注入 meta-prompt,直接推固定「允许/拒绝」,点选后用 `option.keys` 发送 tmux 按键名(允许=`permission.allowKey` 默认 Enter,拒绝=`permission.denyKey` 默认 Escape)。**这是安全关键**:denyKey 必须真的拒绝,改动前务必在真实权限弹窗上验证。
 6. **无 pane 不推**:claude 不在 tmux 里就无法遥控,`startOptionGeneration` 直接跳过。
 7. **防 token 失控**:`safety` 熔断器限制单会话单位时间生成次数;注入只来自"一次自然停"或"一次用户点选",不要引入会自动重复注入的路径。
 8. **状态持久化**:`WAITING_USER` 落盘到 `paths.stateFile`,重启后 `restoreState` 恢复(恢复时**不设表情基线**,使宕机期间的点选也生效)。改等待态的地方记得 `persistState()`。

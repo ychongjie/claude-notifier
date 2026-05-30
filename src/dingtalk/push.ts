@@ -33,13 +33,14 @@ export function buildOptionsText(optionSet: OptionSet, marker: string): string {
   return `**${truncate(optionSet.summary, 200)}**\n\n点对应表情或回复编号：\n${lines}\n\n〔${marker}〕`;
 }
 
-/** M2+：推送状态摘要 + 编号选项。text 内含 marker，便于轮询时定位该消息。 */
+/** 推送状态摘要 + 编号选项。text 内含 marker，便于轮询时定位该消息。 */
 export async function pushOptions(
   dws: DwsClient,
   cfg: Config,
-  args: { sessionId: SessionId; optionSet: OptionSet; marker: string },
+  args: { sessionId: SessionId; optionSet: OptionSet; marker: string; kind?: 'options' | 'permission' },
 ): Promise<SendResult> {
-  const title = `${cfg.dingtalk.pushTitlePrefix} 请选择 #${shortSession(args.sessionId)}`;
+  const label = args.kind === 'permission' ? '需要授权' : '请选择';
+  const title = `${cfg.dingtalk.pushTitlePrefix} ${label} #${shortSession(args.sessionId)}`;
   const text = buildOptionsText(args.optionSet, args.marker);
   return dws.send({ group: cfg.dingtalk.openConversationId, title, text });
 }
