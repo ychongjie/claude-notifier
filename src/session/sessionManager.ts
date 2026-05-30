@@ -110,12 +110,12 @@ export class SessionManager {
     await this.startOptionGeneration(rec, info.assistantTurns);
   }
 
-  /** 注入 meta-prompt，让 Claude 自吐结构化选项。无 pane 时退化为固定选项。 */
+  /** 注入 meta-prompt，让 Claude 自吐结构化选项。 */
   private async startOptionGeneration(rec: SessionRecord, turns: number): Promise<void> {
     const sid = rec.sessionId.slice(0, 8);
+    // 无可用 tmux pane（claude 不在 tmux 里，或 pane 已关）→ 无法遥控该会话，直接跳过、不推送。
     if (!rec.pane || !(await this.tmux.hasPane(rec.pane))) {
-      this.log.warn('无可用 pane，退化为直接推送固定选项', { session: sid });
-      await this.pushAndWait(rec, FALLBACK_OPTIONS, turns);
+      this.log.debug('无可用 tmux pane，跳过（该会话无法遥控）', { session: sid, pane: rec.pane });
       return;
     }
     // 熔断器：单会话在 windowMs 内 meta-prompt 生成次数超阈值 → 不再生成（不注入、不烧 token），降级固定选项。
