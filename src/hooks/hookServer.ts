@@ -4,9 +4,11 @@ import type { Logger } from '../logger.js';
 import type { ClaudeHookPayload, IncomingHook } from './hookTypes.js';
 
 export type HookHandler = (hook: IncomingHook) => void;
+export type StatusProvider = () => unknown;
 
 export class HookServer {
   private server?: Server;
+  private statusProvider?: StatusProvider;
 
   constructor(
     private readonly opts: { host: string; port: number },
@@ -14,9 +16,19 @@ export class HookServer {
     private readonly handler: HookHandler,
   ) {}
 
+  setStatusProvider(p: StatusProvider): void {
+    this.statusProvider = p;
+  }
+
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = createServer((req, res) => {
+        if (req.method === 'GET' && req.url?.startsWith('/status')) {
+          res.statusCode = 200;
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify(this.statusProvider?.() ?? { ok: true }, null, 2));
+          return;
+        }
         if (req.method !== 'POST' || !req.url?.startsWith('/hook')) {
           res.statusCode = 404;
           res.end('not found');

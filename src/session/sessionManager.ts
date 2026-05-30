@@ -1,5 +1,8 @@
-// 会话管理 + 状态机（M2）：锁屏门控推送固定选项 → 轮询识别表情/数字 → tmux 注入。
+// 会话管理 + 状态机：锁屏门控 → 注入 meta-prompt 生成选项 → 推送 → 轮询表情 → tmux 注入。
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { Config } from '../config.js';
+import { expandHome } from '../config.js';
 import type { Logger } from '../logger.js';
 import type { DwsClient } from '../dingtalk/dwsClient.js';
 import type { TmuxClient } from '../tmux/tmuxClient.js';
@@ -30,13 +33,16 @@ export class SessionManager {
   /** 各推送消息的 createTime（ms），供 poller 计算回看窗口。 */
   private readonly pushedCreateMs = new Map<string, number>();
   private tracker?: InboundTracker;
+  private readonly stateFilePath: string;
 
   constructor(
     private readonly cfg: Config,
     private readonly log: Logger,
     private readonly dws: DwsClient,
     private readonly tmux: TmuxClient,
-  ) {}
+  ) {
+    this.stateFilePath = expandHome(cfg.paths.stateFile);
+  }
 
   attachTracker(t: InboundTracker): void {
     this.tracker = t;
@@ -112,6 +118,19 @@ export class SessionManager {
       await this.pushAndWait(rec, FALLBACK_OPTIONS, turns);
       return;
     }
+    // 熔断器：单会话在 windowMs 内 meta-prompt 生成次数超阈值 → 不再生成（不注入、不烧 token），降级固定选项。
+    const now = Date.now();
+    rec.genTimes = (rec.genTimes ?? []).filter((t) => now - t < this.cfg.safety.windowMs);
+    if (rec.genTimes.length >= this.cfg.safety.maxGenerationsPerWindow) {
+      this.log.error('生成频率过高，熔断：降级为固定选项以防 token 失控', {
+        session: sid,
+        count: rec.genTimes.length,
+        windowMs: this.cfg.safety.windowMs,
+      });
+      await this.pushAndWait(rec, FALLBACK_OPTIONS, turns);
+      return;
+    }
+    rec.genTimes.push(now);
     const sentinel = makeSentinel(this.cfg.metaPrompt.sentinelPrefix);
     rec.state = 'GENERATING_OPTIONS';
     rec.genTurns = turns;
@@ -206,6 +225,7 @@ export class SessionManager {
     rec.state = 'WAITING_USER';
     rec.optionSet = optionSet;
     rec.pushedAtTurns = turns;
+    this.persistState();
     this.log.info('已推送选项，等待用户选择', {
       session: rec.sessionId.slice(0, 8),
       pushedMessageId: rec.pushedMessageId,
@@ -229,22 +249,12 @@ export class SessionManager {
     return undefined;
   }
 
-  /** 处理 poller 来的入站事件。 */
+  /** 处理 poller 来的入站事件（仅表情，挂在具体推送消息上，天然归属到对应会话）。 */
   onInboundEvents(events: InboundEvent[]): void {
     for (const ev of events) {
-      if (ev.kind === 'emoji') {
-        const sessionId = this.pushedToSession.get(ev.messageId);
-        if (!sessionId) continue; // 表情不在任何活跃推送消息上
-        void this.resolve(sessionId, ev.emoji, `表情:${ev.emoji}`);
-      } else {
-        // 文本：归给当前唯一在等待的会话（多会话场景 M5 再细化）。
-        const waiting = [...this.sessions.values()].filter((s) => s.state === 'WAITING_USER');
-        if (waiting.length !== 1) {
-          if (waiting.length > 1) this.log.warn('多个会话在等待，文本回复无法归属，忽略', { text: ev.text });
-          continue;
-        }
-        void this.resolve(waiting[0]!.sessionId, ev.text, `文本:${ev.text}`);
-      }
+      const sessionId = this.pushedToSession.get(ev.messageId);
+      if (!sessionId) continue; // 表情不在任何活跃推送消息上
+      void this.resolve(sessionId, ev.emoji, `表情:${ev.emoji}`);
     }
   }
 
@@ -268,6 +278,7 @@ export class SessionManager {
     }
     // 先切到 INJECTING 并清理等待态，避免后续同消息的事件重复触发。
     rec.state = 'INJECTING';
+    rec.genTimes = []; // 用户成功介入 → 重置熔断计数
     this.clearWait(rec);
     try {
       await this.tmux.injectLine(rec.pane, option.injectText, this.cfg.tmux.sendKeysEnterDelayMs);
@@ -278,15 +289,82 @@ export class SessionManager {
     }
   }
 
-  /** 清理一个会话的等待态（推送消息映射等）。 */
+  /** 清理一个会话的等待态（推送消息映射、表情记录、状态文件）。 */
   private clearWait(rec: SessionRecord): void {
     if (rec.pushedMessageId) {
       this.pushedToSession.delete(rec.pushedMessageId);
       this.pushedCreateMs.delete(rec.pushedMessageId);
+      this.tracker?.forget(rec.pushedMessageId);
     }
     rec.pushedMessageId = undefined;
     rec.optionSet = undefined;
     rec.pushedAtTurns = undefined;
+    this.persistState();
+  }
+
+  /** 健康/状态快照（供 status 子命令）。 */
+  getStatus(): unknown {
+    return {
+      onlyWhenLocked: this.cfg.notify.onlyWhenLocked,
+      sessions: [...this.sessions.values()].map((s) => ({
+        session: s.sessionId.slice(0, 8),
+        state: s.state,
+        pane: s.pane,
+        waiting: s.state === 'WAITING_USER' ? s.optionSet?.options.map((o) => `${o.key}:${o.label}`) : undefined,
+      })),
+    };
+  }
+
+  // ---- 状态持久化：让 daemon 重启后仍能接收对此前推送消息的表情 ----
+
+  private persistState(): void {
+    const waits = [...this.sessions.values()]
+      .filter((s) => s.state === 'WAITING_USER' && s.pushedMessageId && s.optionSet)
+      .map((s) => ({
+        sessionId: s.sessionId,
+        pane: s.pane,
+        pushedMessageId: s.pushedMessageId,
+        pushedCreateMs: this.pushedCreateMs.get(s.pushedMessageId!),
+        optionSet: s.optionSet,
+        pushedAtTurns: s.pushedAtTurns,
+      }));
+    try {
+      mkdirSync(dirname(this.stateFilePath), { recursive: true });
+      writeFileSync(this.stateFilePath, JSON.stringify({ waits }, null, 2));
+    } catch (err) {
+      this.log.warn('写状态文件失败', { err: String(err) });
+    }
+  }
+
+  /** 启动时恢复未决的等待，使重启/宕机期间或之后点的表情仍能生效。 */
+  restoreState(): void {
+    let data: { waits?: Array<Record<string, unknown>> };
+    try {
+      data = JSON.parse(readFileSync(this.stateFilePath, 'utf8')) as typeof data;
+    } catch {
+      return; // 无状态文件
+    }
+    let n = 0;
+    for (const w of data.waits ?? []) {
+      const sessionId = w.sessionId as string | undefined;
+      const pushedMessageId = w.pushedMessageId as string | undefined;
+      const optionSet = w.optionSet as OptionSet | undefined;
+      if (!sessionId || !pushedMessageId || !optionSet) continue;
+      const rec: SessionRecord = {
+        sessionId,
+        state: 'WAITING_USER',
+        pane: w.pane as string | undefined,
+        pushedMessageId,
+        optionSet,
+        pushedAtTurns: w.pushedAtTurns as number | undefined,
+      };
+      this.sessions.set(sessionId, rec);
+      this.pushedToSession.set(pushedMessageId, sessionId);
+      this.pushedCreateMs.set(pushedMessageId, (w.pushedCreateMs as number) ?? Date.now());
+      // 不设表情基线：宕机期间已点的表情视为"新"，重启后会被处理。
+      n++;
+    }
+    if (n > 0) this.log.info('已恢复未决等待', { count: n });
   }
 }
 

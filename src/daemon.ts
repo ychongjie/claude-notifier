@@ -34,6 +34,8 @@ export class Daemon {
   }
 
   async start(): Promise<void> {
+    this.hookServer.setStatusProvider(() => this.sessions.getStatus());
+    this.sessions.restoreState(); // 恢复重启前未决的等待
     await this.hookServer.start();
     this.poller.start();
     this.log.info('daemon 已启动', { group: this.cfg.dingtalk.openConversationId });
@@ -47,12 +49,13 @@ export class Daemon {
   }
 
   private onHook(h: IncomingHook): void {
-    // 等待输入类：Stop（立即）/ idle_prompt（60s 兜底）/ permission_prompt。
-    const isPermission = h.event === 'Notification' && h.notificationType === 'permission_prompt';
+    // 只在 Claude 真正结束一轮、等人介入时触发：
+    //   Stop（立即）/ Notification idle_prompt（锁屏时 60s 兜底）。
+    // 不处理 permission_prompt（轮次中途等工具授权，不适合 meta-prompt 流程）。
     const isIdle =
       h.event === 'Stop' ||
       (h.event === 'Notification' && (h.notificationType === 'idle_prompt' || h.notificationType == null));
-    if (!isPermission && !isIdle) return;
+    if (!isIdle) return;
     void this.sessions.onIdleHook(h);
   }
 }

@@ -7,7 +7,7 @@ export type SessionState =
   | 'WAITING_USER' // 已推送选项，轮询用户选择
   | 'INJECTING'; // 已注入，等 Claude 跑下一轮（其完成即下一次自然停）
 
-/** 用户在钉钉上点的表情 reaction（emoji 名即选项 key）。 */
+/** 用户在钉钉上点的表情 reaction（emoji 名即选项 key）。唯一支持的输入方式。 */
 export interface EmojiEvent {
   kind: 'emoji';
   emoji: string;
@@ -15,15 +15,7 @@ export interface EmojiEvent {
   messageId: string;
 }
 
-/** 用户发的文本消息（数字兜底）。 */
-export interface TextEvent {
-  kind: 'text';
-  text: string;
-  messageId: string;
-  createTimeMs: number;
-}
-
-export type InboundEvent = EmojiEvent | TextEvent;
+export type InboundEvent = EmojiEvent;
 
 /** 单个 session 的运行态。 */
 export interface SessionRecord {
@@ -45,4 +37,6 @@ export interface SessionRecord {
   retriesLeft?: number;
   /** 生成超时定时器。 */
   genTimer?: ReturnType<typeof setTimeout>;
+  /** 熔断器：近期 meta-prompt 注入时间戳（ms），用于限制单位时间生成次数。 */
+  genTimes?: number[];
 }

@@ -59,10 +59,18 @@ async function main(): Promise<void> {
       process.stdout.write(`${s.loaded ? '已加载' : '未加载'}：${s.detail}\n`);
       break;
     }
-    case 'status':
-      process.stderr.write('status: 尚未实现（M4）\n');
-      process.exit(1);
+    case 'status': {
+      const cfg = loadConfig();
+      try {
+        const r = await fetch(`http://127.0.0.1:${cfg.hookServer.port}/status`);
+        const j = await r.json();
+        process.stdout.write(JSON.stringify(j, null, 2) + '\n');
+      } catch {
+        process.stderr.write(`daemon 未运行或无法连接（端口 ${cfg.hookServer.port}）\n`);
+        process.exit(1);
+      }
       break;
+    }
     case undefined:
     case '-h':
     case '--help':

@@ -53,6 +53,13 @@ export const ConfigSchema = z.object({
       onlyWhenLocked: z.boolean().default(true),
     })
     .default({}),
+  safety: z
+    .object({
+      // 熔断器：单会话在 windowMs 内最多注入这么多次 meta-prompt，超出则降级为固定选项（不再生成，防 token 失控）。
+      maxGenerationsPerWindow: z.number().int().positive().default(8),
+      windowMs: z.number().int().positive().default(300000),
+    })
+    .default({}),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

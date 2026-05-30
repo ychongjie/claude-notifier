@@ -48,10 +48,21 @@ export class DwsClient {
     } catch (err) {
       throw new DwsError(`dws 调用失败: ${args.join(' ')}`, err);
     }
+    let parsed: unknown;
     try {
-      return JSON.parse(stdout);
+      parsed = JSON.parse(stdout);
     } catch (err) {
       throw new DwsError('dws 输出不是合法 JSON', err, stdout);
+    }
+    this.detectAuthFailure(parsed);
+    return parsed;
+  }
+
+  /** 识别 dws 鉴权失效/过期，给出清晰告警（daemon 无法自修，需人工 dws auth login）。 */
+  private detectAuthFailure(parsed: unknown): void {
+    const s = JSON.stringify(parsed);
+    if (/PAT_\w*?(NO_PERMISSION|RISK)|authenticated"\s*:\s*false|未登录|登录已过期|token.*(expired|invalid)/i.test(s)) {
+      this.log.error('dws 鉴权可能已失效/过期，请在终端运行：dws auth login', { hint: s.slice(0, 160) });
     }
   }
 

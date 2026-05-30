@@ -24,7 +24,7 @@ export class Poller {
     private readonly getContext: () => PollContext,
     private readonly onEvents: (events: InboundEvent[]) => void,
   ) {
-    this.tracker = new InboundTracker(cfg.dingtalk.userDisplayName, cfg.poll.processedIdsMax);
+    this.tracker = new InboundTracker(cfg.dingtalk.userDisplayName);
   }
 
   start(): void {
@@ -39,24 +39,21 @@ export class Poller {
 
   private async tick(): Promise<void> {
     if (this.running) return; // 防重入（上一轮还没结束）
+    const ctx = this.getContext();
+    // 没有在等待的会话就不轮询，省 dws 调用（也避免无谓的鉴权消耗）。
+    if (ctx.activePushedIds.size === 0) return;
     this.running = true;
     try {
-      const ctx = this.getContext();
       const slack = this.cfg.poll.overlapSlackMs;
-      const now = Date.now();
-      // 回看窗口：覆盖水位、活跃推送消息时间、以及默认 5 分钟兜底，取最早者。
-      const candidates = [this.tracker.watermarkMs - slack, now - 5 * 60 * 1000];
-      if (ctx.earliestActiveMs !== undefined) candidates.push(ctx.earliestActiveMs - slack);
-      const sinceMs = Math.min(...candidates.filter((n) => n > 0));
-
+      // 回看窗口覆盖最早的活跃推送消息时间（迟到表情不漏），无则近 5 分钟。
+      const base = ctx.earliestActiveMs ?? Date.now();
+      const sinceMs = Math.max(1, base - slack);
       const messages = await this.dws.list({
         group: this.cfg.dingtalk.openConversationId,
         sinceMs,
         forward: false,
         limit: this.cfg.poll.listLimit,
       });
-      // list 是从新往老，按时间升序处理更自然。
-      messages.sort((a, b) => a.createTime.localeCompare(b.createTime));
       const events = this.tracker.ingest(messages, ctx.activePushedIds);
       if (events.length) this.onEvents(events);
     } catch (err) {

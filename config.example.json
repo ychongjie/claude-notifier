@@ -42,5 +42,9 @@
   },
   "notify": {
     "onlyWhenLocked": true
+  },
+  "safety": {
+    "maxGenerationsPerWindow": 8,
+    "windowMs": 300000
   }
 }
