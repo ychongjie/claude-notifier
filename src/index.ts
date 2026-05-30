@@ -1,6 +1,8 @@
 // CLI 入口。子命令：start | install-hooks | status。
-// M0 仅搭好骨架，具体实现随 M1+ 填充。
-import { loadConfig } from './config.js';
+import { loadConfig, expandHome } from './config.js';
+import { Logger } from './logger.js';
+import { Daemon } from './daemon.js';
+import { installHooks } from './hooks/installHooks.js';
 
 const HELP = `claude-notifier — 钉钉远程驱动本地 Claude Code
 
@@ -16,16 +18,27 @@ const HELP = `claude-notifier — 钉钉远程驱动本地 Claude Code
 async function main(): Promise<void> {
   const cmd = process.argv[2];
   switch (cmd) {
-    case 'start':
-      // 校验配置可加载，真正的 daemon 在 M1 接入。
-      loadConfig();
-      process.stderr.write('start: daemon 尚未实现（M1）\n');
-      process.exit(1);
+    case 'start': {
+      const cfg = loadConfig();
+      const log = new Logger({ level: process.env.CN_LOG_LEVEL as never, filePath: expandHome(cfg.paths.logFile) });
+      await new Daemon(cfg, log).start();
+      break; // daemon 常驻，靠信号退出
+    }
+    case 'install-hooks': {
+      const cfg = loadConfig();
+      const dry = process.argv.includes('--dry-run');
+      const settingsPath = process.argv.includes('--settings')
+        ? process.argv[process.argv.indexOf('--settings') + 1]
+        : undefined;
+      const res = installHooks({ port: cfg.hookServer.port, dryRun: dry, settingsPath });
+      if (dry) {
+        process.stdout.write(`[dry-run] 将写入 ${res.settingsPath}\nhook 脚本 → ${res.hookScriptDest}\n\n`);
+        process.stdout.write(JSON.stringify(res.settings, null, 2) + '\n');
+      } else {
+        process.stdout.write(`已写入 ${res.settingsPath}（原文件备份为 .cn-backup）\nhook 脚本 → ${res.hookScriptDest}\n`);
+      }
       break;
-    case 'install-hooks':
-      process.stderr.write('install-hooks: 尚未实现（M1）\n');
-      process.exit(1);
-      break;
+    }
     case 'status':
       process.stderr.write('status: 尚未实现（M4）\n');
       process.exit(1);

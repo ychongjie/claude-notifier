@@ -1,0 +1,17 @@
+#!/bin/sh
+# Claude Code hook 入口。Claude 把 hook JSON payload 从 stdin 传入。
+# 我们把 $TMUX_PANE（hook 子进程从 Claude 所在 pane 继承）作为 query 参数附上，
+# 连同原始 payload POST 给本地 daemon。
+#
+# 设计原则：fire-and-forget，绝不阻塞或失败 Claude 的轮次
+#   - curl -m 2 限时 2 秒
+#   - 末尾 || true 吞掉所有错误（daemon 没起、端口不通等都不影响 Claude）
+port="${CN_PORT:-8787}"
+pane="${TMUX_PANE:-}"
+# pane 走 header 而非 query：tmux pane id 以 % 开头（如 %42），放 URL 会被当百分号转义破坏。
+# --noproxy '*'：本地回环必须绕过 http_proxy/https_proxy，否则用户开着代理时请求被代理拦截。
+curl -s -m 2 --noproxy '*' -X POST \
+  -H 'Content-Type: application/json' \
+  -H "X-CN-Pane: ${pane}" \
+  --data-binary @- \
+  "http://127.0.0.1:${port}/hook" >/dev/null 2>&1 || true
