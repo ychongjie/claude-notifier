@@ -84,10 +84,11 @@ export class SessionManager {
     const info = readTranscript(h.transcriptPath);
 
     if (rec.state === 'WAITING_USER') {
-      // 已在等待。若 transcript 轮数已超过推送时（用户可能直接在终端操作了）→ 旧选项作废，重开。
+      // 已在等待。若 transcript 轮数已超过推送时（用户直接回终端操作了）→ 旧选项作废。
       if (rec.pushedAtTurns !== undefined && info.assistantTurns > rec.pushedAtTurns) {
-        this.log.info('等待期间检测到新进展，作废旧选项重开', { session: sid });
+        this.log.info('等待期间检测到新进展，作废旧选项', { session: sid });
         this.clearWait(rec);
+        rec.state = 'IDLE'; // 关键：回到 IDLE，按新的自然停继续处理（否则卡死在 WAITING_USER）
       } else {
         this.log.debug('已在等待用户，忽略重复 hook', { session: sid });
         return;
