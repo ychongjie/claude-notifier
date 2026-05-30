@@ -21,11 +21,11 @@
     "paneOverride": null
   },
   "emojis": {
-    "candidates": ["1", "2", "3"]
+    "candidates": ["1", "2", "3", "4", "5"]
   },
   "options": {
     "minCount": 2,
-    "maxCount": 3,
+    "maxCount": 5,
     "retryOnInvalid": 1
   },
   "timeouts": {

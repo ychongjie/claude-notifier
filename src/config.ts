@@ -27,11 +27,12 @@ export const ConfigSchema = z.object({
     paneOverride: z.record(z.string()).nullable().default(null),
   }),
   emojis: z.object({
-    candidates: z.array(z.string().min(1)).min(1).default(['1', '2', '3']),
+    // 你手动定义的文字表情名，直接等于选项 key（最多 5 个）。
+    candidates: z.array(z.string().min(1)).min(1).max(5).default(['1', '2', '3', '4', '5']),
   }),
   options: z.object({
     minCount: z.number().int().min(1).default(2),
-    maxCount: z.number().int().min(1).default(3),
+    maxCount: z.number().int().min(1).max(5).default(5),
     retryOnInvalid: z.number().int().nonnegative().default(1),
   }),
   timeouts: z.object({

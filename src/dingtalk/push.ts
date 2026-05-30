@@ -27,14 +27,19 @@ export async function pushStatus(
   return dws.send({ group: cfg.dingtalk.openConversationId, title, text });
 }
 
-/** M2+：推送状态摘要 + 编号选项。 */
+/** 把选项渲染成消息正文，并在末尾附一个可检索的标记（用于在 list 里定位本条推送）。 */
+export function buildOptionsText(optionSet: OptionSet, marker: string): string {
+  const lines = optionSet.options.map((o) => `${o.key}) ${o.label}`).join('\n');
+  return `**${truncate(optionSet.summary, 200)}**\n\n点对应表情或回复编号：\n${lines}\n\n〔${marker}〕`;
+}
+
+/** M2+：推送状态摘要 + 编号选项。text 内含 marker，便于轮询时定位该消息。 */
 export async function pushOptions(
   dws: DwsClient,
   cfg: Config,
-  args: { sessionId: SessionId; optionSet: OptionSet },
+  args: { sessionId: SessionId; optionSet: OptionSet; marker: string },
 ): Promise<SendResult> {
   const title = `${cfg.dingtalk.pushTitlePrefix} 请选择 #${shortSession(args.sessionId)}`;
-  const lines = args.optionSet.options.map((o) => `${o.key}) ${o.label}`).join('\n');
-  const text = `**${truncate(args.optionSet.summary, 200)}**\n\n点对应表情或回复编号：\n${lines}`;
+  const text = buildOptionsText(args.optionSet, args.marker);
   return dws.send({ group: cfg.dingtalk.openConversationId, title, text });
 }
