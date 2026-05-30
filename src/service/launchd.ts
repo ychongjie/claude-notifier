@@ -65,11 +65,17 @@ ${argXml}
 
 function launchctl(args: string[], opts: { ignoreError?: boolean } = {}): string {
   try {
-    return execFileSync('/bin/launchctl', args, { encoding: 'utf8' });
+    // stderr 用 pipe 捕获而非继承，避免 print 轮询时的 "Could not find service" 噪声。
+    return execFileSync('/bin/launchctl', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     if (opts.ignoreError) return '';
     throw err;
   }
+}
+
+/** 同步休眠（CLI 场景，等 launchd 卸载完成）。 */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 export interface ServiceResult {
@@ -85,9 +91,26 @@ export function installService(): ServiceResult {
   const { plist, logPath } = buildPlist();
   mkdirSync(dirname(pp), { recursive: true });
   writeFileSync(pp, plist);
-  // 幂等：若已加载先卸载。
+  // 幂等：若已加载先卸载，并等旧实例（含端口）完全释放，否则 bootstrap 会报 I/O error。
   launchctl(['bootout', `${target}/${LABEL}`], { ignoreError: true });
-  launchctl(['bootstrap', target, pp]);
+  for (let i = 0; i < 20; i++) {
+    sleepSync(300);
+    if (!launchctl(['print', `${target}/${LABEL}`], { ignoreError: true })) break; // 已卸载
+  }
+  // bootstrap 带重试（应对卸载尚未完全落定的瞬态 I/O error）。
+  let lastErr: unknown;
+  let ok = false;
+  for (let i = 0; i < 5; i++) {
+    try {
+      launchctl(['bootstrap', target, pp]);
+      ok = true;
+      break;
+    } catch (err) {
+      lastErr = err;
+      sleepSync(700);
+    }
+  }
+  if (!ok) throw lastErr;
   // 强制（重）启动一次。
   launchctl(['kickstart', '-k', `${target}/${LABEL}`], { ignoreError: true });
   return { plistPath: pp, logPath };
