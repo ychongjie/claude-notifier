@@ -42,15 +42,19 @@ export class Daemon {
   private onHook(h: IncomingHook): void {
     if (h.pane) this.paneBySession.set(h.sessionId, h.pane);
 
-    // 只在等待输入 / 自然停 时通知（permission_prompt 也算）。
-    const isWaiting =
+    // 只处理"等待输入"类事件：Stop（立即）、Notification idle_prompt（60s 延迟兜底）、
+    // permission_prompt（需要授权）。其它 Notification 子类型忽略。
+    const isPermission = h.event === 'Notification' && h.notificationType === 'permission_prompt';
+    const isIdle =
       h.event === 'Stop' ||
-      h.event === 'Notification'; // M1 不细分 matcher，先全收
-    if (!isWaiting) return;
+      (h.event === 'Notification' && (h.notificationType === 'idle_prompt' || h.notificationType == null));
+    if (!isPermission && !isIdle) return;
 
     const info = readTranscript(h.transcriptPath);
-    // 去重 key：同一 session 同一事件 + 相同 assistant 轮数 ⇒ 视为重复，跳过。
-    const key = `${h.event}:${h.notificationType ?? ''}:${info.assistantTurns}`;
+    // 去重 key：把 Stop 与 idle_prompt 归为同一个 "idle" 类（同一次停只推一条，
+    // idle_prompt 退化为 Stop 未送达时的兜底）；permission 单独成类避免被吞。
+    const cls = isPermission ? 'perm' : 'idle';
+    const key = `${cls}:${info.assistantTurns}`;
     if (this.lastNotified.get(h.sessionId) === key) {
       this.log.debug('重复 hook，跳过推送', { session: h.sessionId.slice(0, 8), key });
       return;
