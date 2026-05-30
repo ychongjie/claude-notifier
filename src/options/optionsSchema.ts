@@ -68,3 +68,12 @@ export function parseOptions(text: string | null, expectedSentinel: string): Opt
   if (options.length < 2) return null;
   return { summary: parsed.data.summary, options };
 }
+
+/** 在多条 assistant 文本里(从新到旧)找出 sentinel 匹配且合法的选项。 */
+export function findOptionsBySentinel(texts: string[], expectedSentinel: string): OptionSet | null {
+  for (let i = texts.length - 1; i >= 0; i--) {
+    const r = parseOptions(texts[i]!, expectedSentinel);
+    if (r) return r;
+  }
+  return null;
+}

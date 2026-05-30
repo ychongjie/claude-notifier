@@ -7,6 +7,8 @@ export interface TranscriptInfo {
   assistantTurns: number;
   /** 最后一条 assistant 的纯文本（拼接所有 text 块），无则 null。 */
   lastAssistantText: string | null;
+  /** 所有非空 assistant 文本（按出现顺序），用于按 sentinel 搜索。 */
+  assistantTexts: string[];
 }
 
 interface TranscriptLine {
@@ -35,10 +37,10 @@ export function readTranscript(path: string): TranscriptInfo {
   try {
     raw = readFileSync(path, 'utf8');
   } catch {
-    return { assistantTurns: 0, lastAssistantText: null };
+    return { assistantTurns: 0, lastAssistantText: null, assistantTexts: [] };
   }
   let assistantTurns = 0;
-  let lastAssistantText: string | null = null;
+  const assistantTexts: string[] = [];
   for (const rawLine of raw.split('\n')) {
     const s = rawLine.trim();
     if (!s) continue;
@@ -51,8 +53,12 @@ export function readTranscript(path: string): TranscriptInfo {
     if (line.type === 'assistant' && line.message?.role === 'assistant') {
       assistantTurns++;
       const text = extractText(line);
-      if (text != null) lastAssistantText = text;
+      if (text != null && text.length > 0) assistantTexts.push(text);
     }
   }
-  return { assistantTurns, lastAssistantText };
+  return {
+    assistantTurns,
+    lastAssistantText: assistantTexts.length ? assistantTexts[assistantTexts.length - 1]! : null,
+    assistantTexts,
+  };
 }

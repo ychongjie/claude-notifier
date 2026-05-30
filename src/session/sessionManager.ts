@@ -7,7 +7,7 @@ import { pushOptions } from '../dingtalk/push.js';
 import { isScreenLocked } from '../mac/lockState.js';
 import { readTranscript } from '../options/transcript.js';
 import { buildMetaPrompt, makeSentinel } from '../options/metaPrompt.js';
-import { parseOptions } from '../options/optionsSchema.js';
+import { findOptionsBySentinel } from '../options/optionsSchema.js';
 import type { IncomingHook } from '../hooks/hookTypes.js';
 import type { InboundTracker } from '../dingtalk/inboundDedup.js';
 import type { PollContext } from '../dingtalk/poller.js';
@@ -67,18 +67,15 @@ export class SessionManager {
     const rec = this.get(h.sessionId);
     if (h.pane) rec.pane = h.pane;
 
-    const info = readTranscript(h.transcriptPath);
     const sid = h.sessionId.slice(0, 8);
 
-    // 正在生成选项：等 Claude 产出（assistant 轮数前进）后解析。
+    // 正在生成选项：Stop 到达即尝试解析（内部按 sentinel 搜索 + 重读容忍刷盘延迟）。
     if (rec.state === 'GENERATING_OPTIONS') {
-      if (rec.genTurns !== undefined && info.assistantTurns > rec.genTurns) {
-        await this.handleGenerationResult(rec, info.assistantTurns, info.lastAssistantText);
-      } else {
-        this.log.debug('生成中，忽略未前进的 hook', { session: sid, turns: info.assistantTurns, gen: rec.genTurns });
-      }
+      await this.handleGenerationResult(rec, h.transcriptPath);
       return;
     }
+
+    const info = readTranscript(h.transcriptPath);
 
     if (rec.state === 'WAITING_USER') {
       // 已在等待。若 transcript 轮数已超过推送时（用户可能直接在终端操作了）→ 旧选项作废，重开。
@@ -131,11 +128,21 @@ export class SessionManager {
     }
   }
 
-  /** Claude 产出后：解析→推送；非法→重试一次→固定选项。 */
-  private async handleGenerationResult(rec: SessionRecord, turns: number, lastText: string | null): Promise<void> {
+  /** Claude 产出后：按 sentinel 搜索合法选项（重读容忍刷盘延迟）→推送；找不到→重试一次→固定选项。 */
+  private async handleGenerationResult(rec: SessionRecord, transcriptPath: string): Promise<void> {
     const sid = rec.sessionId.slice(0, 8);
+    const sentinel = rec.sentinel ?? '';
+    // transcript 写入相对 Stop hook 有刷盘延迟,重读最多 ~2s 直到按 sentinel 找到合法选项。
+    let parsed = null;
+    let turns = rec.genTurns ?? 0;
+    for (let i = 0; i < 5; i++) {
+      const info = readTranscript(transcriptPath);
+      turns = info.assistantTurns;
+      parsed = findOptionsBySentinel(info.assistantTexts, sentinel);
+      if (parsed) break;
+      await delay(400);
+    }
     this.clearGenTimer(rec);
-    const parsed = parseOptions(lastText, rec.sentinel ?? '');
     if (parsed) {
       this.log.info('选项已生成', { session: sid, options: parsed.options.map((o) => o.key).join(',') });
       await this.pushAndWait(rec, parsed, turns);
@@ -143,11 +150,11 @@ export class SessionManager {
     }
     if ((rec.retriesLeft ?? 0) > 0 && rec.pane) {
       rec.retriesLeft = (rec.retriesLeft ?? 0) - 1;
-      rec.genTurns = turns; // 下一次产出需超过本次
+      rec.genTurns = turns;
       this.scheduleGenTimeout(rec);
-      this.log.warn('选项 JSON 非法，重试一次', { session: sid });
+      this.log.warn('未找到合法选项,重试一次', { session: sid });
       try {
-        await this.tmux.injectLine(rec.pane, buildMetaPrompt(rec.sentinel ?? '', this.cfg.options.maxCount), this.cfg.tmux.sendKeysEnterDelayMs);
+        await this.tmux.injectLine(rec.pane, buildMetaPrompt(sentinel, this.cfg.options.maxCount), this.cfg.tmux.sendKeysEnterDelayMs);
         return;
       } catch (err) {
         this.log.error('重试注入失败', { err: String(err) });
