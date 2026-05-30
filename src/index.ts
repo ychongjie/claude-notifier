@@ -3,13 +3,17 @@ import { loadConfig, expandHome } from './config.js';
 import { Logger } from './logger.js';
 import { Daemon } from './daemon.js';
 import { installHooks } from './hooks/installHooks.js';
+import { installService, uninstallService, serviceStatus } from './service/launchd.js';
 
 const HELP = `claude-notifier — 钉钉远程驱动本地 Claude Code
 
 用法:
-  claude-notifier start           启动常驻 bridge 守护进程
-  claude-notifier install-hooks   把 hook 写入 ~/.claude/settings.json
-  claude-notifier status          查看运行状态
+  claude-notifier start              前台启动常驻 bridge 守护进程
+  claude-notifier install-hooks      把 hook 写入 ~/.claude/settings.json
+  claude-notifier install-service    安装 launchd 服务（开机自启 + 崩溃重启）
+  claude-notifier uninstall-service  卸载 launchd 服务
+  claude-notifier service-status     查看 launchd 服务状态
+  claude-notifier status             查看运行状态（M4）
 
 环境变量:
   CN_CONFIG   配置文件路径（默认 ./config.json）
@@ -37,6 +41,22 @@ async function main(): Promise<void> {
       } else {
         process.stdout.write(`已写入 ${res.settingsPath}（原文件备份为 .cn-backup）\nhook 脚本 → ${res.hookScriptDest}\n`);
       }
+      break;
+    }
+    case 'install-service': {
+      loadConfig(); // 提前校验配置可加载，避免装了个起不来的服务
+      const res = installService();
+      process.stdout.write(`服务已安装并加载：${res.plistPath}\n日志：${res.logPath}\n（开机自启 + 崩溃自动重启）\n`);
+      break;
+    }
+    case 'uninstall-service': {
+      const res = uninstallService();
+      process.stdout.write(`服务已卸载：${res.plistPath}\n`);
+      break;
+    }
+    case 'service-status': {
+      const s = serviceStatus();
+      process.stdout.write(`${s.loaded ? '已加载' : '未加载'}：${s.detail}\n`);
       break;
     }
     case 'status':
