@@ -39,5 +39,8 @@
   },
   "metaPrompt": {
     "sentinelPrefix": "CN_OPTIONS_"
+  },
+  "notify": {
+    "onlyWhenLocked": true
   }
 }

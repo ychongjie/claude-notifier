@@ -46,6 +46,12 @@ export const ConfigSchema = z.object({
   metaPrompt: z.object({
     sentinelPrefix: z.string().default('CN_OPTIONS_'),
   }),
+  notify: z
+    .object({
+      // 仅在 Mac 锁屏时推送，避免你在电脑前工作时被打扰。
+      onlyWhenLocked: z.boolean().default(true),
+    })
+    .default({}),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

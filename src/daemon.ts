@@ -8,6 +8,7 @@ import { HookServer } from './hooks/hookServer.js';
 import type { IncomingHook } from './hooks/hookTypes.js';
 import { readTranscript } from './options/transcript.js';
 import { pushStatus } from './dingtalk/push.js';
+import { isScreenLocked } from './mac/lockState.js';
 
 export class Daemon {
   private readonly dws: DwsClient;
@@ -59,12 +60,23 @@ export class Daemon {
       this.log.debug('重复 hook，跳过推送', { session: h.sessionId.slice(0, 8), key });
       return;
     }
+    // 同步占位，防止 Stop 与 idle_prompt 在异步锁屏检测期间双双过关导致重复推送。
     this.lastNotified.set(h.sessionId, key);
 
-    void this.notify(h, info.lastAssistantText);
+    void this.notify(h, info.lastAssistantText, key);
   }
 
-  private async notify(h: IncomingHook, summary: string | null): Promise<void> {
+  private async notify(h: IncomingHook, summary: string | null, key: string): Promise<void> {
+    // 仅锁屏时推送：未锁则跳过，并撤销占位，使稍后真锁屏（或 60s idle_prompt 兜底）能补推。
+    if (this.cfg.notify.onlyWhenLocked) {
+      const locked = await isScreenLocked();
+      if (locked === false) {
+        this.log.debug('屏幕未锁，跳过推送', { session: h.sessionId.slice(0, 8), key });
+        if (this.lastNotified.get(h.sessionId) === key) this.lastNotified.delete(h.sessionId);
+        return;
+      }
+      // locked === true 或 null（检测不到）都照推。
+    }
     try {
       const res = await pushStatus(this.dws, this.cfg, { sessionId: h.sessionId, summary });
       this.log.info('已推送状态通知', {
@@ -75,6 +87,8 @@ export class Daemon {
       });
     } catch (err) {
       this.log.error('推送失败', { err: String(err) });
+      // 推送失败也撤销占位，避免把"没推成功"误记为"已通知"。
+      if (this.lastNotified.get(h.sessionId) === key) this.lastNotified.delete(h.sessionId);
     }
   }
 }
