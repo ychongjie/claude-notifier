@@ -6,14 +6,16 @@ import type { TmuxClient } from '../tmux/tmuxClient.js';
 import { pushOptions } from '../dingtalk/push.js';
 import { isScreenLocked } from '../mac/lockState.js';
 import { readTranscript } from '../options/transcript.js';
+import { buildMetaPrompt, makeSentinel } from '../options/metaPrompt.js';
+import { parseOptions } from '../options/optionsSchema.js';
 import type { IncomingHook } from '../hooks/hookTypes.js';
 import type { InboundTracker } from '../dingtalk/inboundDedup.js';
 import type { PollContext } from '../dingtalk/poller.js';
 import type { InboundEvent, SessionRecord } from './types.js';
 import type { OptionSet } from '../types.js';
 
-/** M2 固定选项（M3 改为 meta-prompt 自生成）。 */
-const FIXED_OPTIONS: OptionSet = {
+/** 兜底选项：meta-prompt 生成失败/超时/无 pane 时用。 */
+const FALLBACK_OPTIONS: OptionSet = {
   summary: 'Claude 停下，等待你的输入',
   options: [
     { key: '1', label: '继续', injectText: '继续' },
@@ -66,14 +68,25 @@ export class SessionManager {
     if (h.pane) rec.pane = h.pane;
 
     const info = readTranscript(h.transcriptPath);
+    const sid = h.sessionId.slice(0, 8);
+
+    // 正在生成选项：等 Claude 产出（assistant 轮数前进）后解析。
+    if (rec.state === 'GENERATING_OPTIONS') {
+      if (rec.genTurns !== undefined && info.assistantTurns > rec.genTurns) {
+        await this.handleGenerationResult(rec, info.assistantTurns, info.lastAssistantText);
+      } else {
+        this.log.debug('生成中，忽略未前进的 hook', { session: sid, turns: info.assistantTurns, gen: rec.genTurns });
+      }
+      return;
+    }
 
     if (rec.state === 'WAITING_USER') {
       // 已在等待。若 transcript 轮数已超过推送时（用户可能直接在终端操作了）→ 旧选项作废，重开。
       if (rec.pushedAtTurns !== undefined && info.assistantTurns > rec.pushedAtTurns) {
-        this.log.info('等待期间检测到新进展，作废旧选项重开', { session: h.sessionId.slice(0, 8) });
+        this.log.info('等待期间检测到新进展，作废旧选项重开', { session: sid });
         this.clearWait(rec);
       } else {
-        this.log.debug('已在等待用户，忽略重复 hook', { session: h.sessionId.slice(0, 8) });
+        this.log.debug('已在等待用户，忽略重复 hook', { session: sid });
         return;
       }
     }
@@ -82,19 +95,90 @@ export class SessionManager {
       rec.state = 'IDLE';
     }
 
-    // 仅锁屏时推送。
+    // 仅锁屏时推送/生成。
     if (this.cfg.notify.onlyWhenLocked) {
       const locked = await isScreenLocked();
       if (locked === false) {
-        this.log.debug('屏幕未锁，跳过推送', { session: h.sessionId.slice(0, 8) });
+        this.log.debug('屏幕未锁，跳过', { session: sid });
         return;
       }
     }
 
-    await this.pushAndWait(rec, FIXED_OPTIONS, info.assistantTurns);
+    await this.startOptionGeneration(rec, info.assistantTurns);
+  }
+
+  /** 注入 meta-prompt，让 Claude 自吐结构化选项。无 pane 时退化为固定选项。 */
+  private async startOptionGeneration(rec: SessionRecord, turns: number): Promise<void> {
+    const sid = rec.sessionId.slice(0, 8);
+    if (!rec.pane || !(await this.tmux.hasPane(rec.pane))) {
+      this.log.warn('无可用 pane，退化为直接推送固定选项', { session: sid });
+      await this.pushAndWait(rec, FALLBACK_OPTIONS, turns);
+      return;
+    }
+    const sentinel = makeSentinel(this.cfg.metaPrompt.sentinelPrefix);
+    rec.state = 'GENERATING_OPTIONS';
+    rec.genTurns = turns;
+    rec.sentinel = sentinel;
+    rec.retriesLeft = this.cfg.options.retryOnInvalid;
+    this.scheduleGenTimeout(rec);
+    try {
+      await this.tmux.injectLine(rec.pane, buildMetaPrompt(sentinel, this.cfg.options.maxCount), this.cfg.tmux.sendKeysEnterDelayMs);
+      this.log.info('已注入 meta-prompt，等待选项产出', { session: sid, sentinel });
+    } catch (err) {
+      this.log.error('注入 meta-prompt 失败，退化为固定选项', { err: String(err) });
+      this.clearGen(rec);
+      await this.pushAndWait(rec, FALLBACK_OPTIONS, turns);
+    }
+  }
+
+  /** Claude 产出后：解析→推送；非法→重试一次→固定选项。 */
+  private async handleGenerationResult(rec: SessionRecord, turns: number, lastText: string | null): Promise<void> {
+    const sid = rec.sessionId.slice(0, 8);
+    this.clearGenTimer(rec);
+    const parsed = parseOptions(lastText, rec.sentinel ?? '');
+    if (parsed) {
+      this.log.info('选项已生成', { session: sid, options: parsed.options.map((o) => o.key).join(',') });
+      await this.pushAndWait(rec, parsed, turns);
+      return;
+    }
+    if ((rec.retriesLeft ?? 0) > 0 && rec.pane) {
+      rec.retriesLeft = (rec.retriesLeft ?? 0) - 1;
+      rec.genTurns = turns; // 下一次产出需超过本次
+      this.scheduleGenTimeout(rec);
+      this.log.warn('选项 JSON 非法，重试一次', { session: sid });
+      try {
+        await this.tmux.injectLine(rec.pane, buildMetaPrompt(rec.sentinel ?? '', this.cfg.options.maxCount), this.cfg.tmux.sendKeysEnterDelayMs);
+        return;
+      } catch (err) {
+        this.log.error('重试注入失败', { err: String(err) });
+      }
+    }
+    this.log.warn('选项生成失败，使用固定选项', { session: sid });
+    await this.pushAndWait(rec, FALLBACK_OPTIONS, turns);
+  }
+
+  private scheduleGenTimeout(rec: SessionRecord): void {
+    this.clearGenTimer(rec);
+    rec.genTimer = setTimeout(() => void this.onGenTimeout(rec), this.cfg.timeouts.generationMs);
+  }
+  private clearGenTimer(rec: SessionRecord): void {
+    if (rec.genTimer) clearTimeout(rec.genTimer);
+    rec.genTimer = undefined;
+  }
+  private clearGen(rec: SessionRecord): void {
+    this.clearGenTimer(rec);
+    rec.sentinel = undefined;
+    rec.genTurns = undefined;
+    rec.retriesLeft = undefined;
+  }
+  private async onGenTimeout(rec: SessionRecord): Promise<void> {
+    if (rec.state !== 'GENERATING_OPTIONS') return;
+    this.log.warn('选项生成超时，使用固定选项', { session: rec.sessionId.slice(0, 8) });
+    await this.pushAndWait(rec, FALLBACK_OPTIONS, rec.genTurns ?? 0);
   }
 
   private async pushAndWait(rec: SessionRecord, optionSet: OptionSet, turns: number): Promise<void> {
+    this.clearGen(rec); // 离开 GENERATING_OPTIONS
     const marker = `CN-${rec.sessionId.slice(0, 8)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
     try {
       await pushOptions(this.dws, this.cfg, { sessionId: rec.sessionId, optionSet, marker });
