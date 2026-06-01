@@ -59,6 +59,7 @@ src/service/launchd.ts           # LaunchAgent plist 生成与加载
 9. **外部命令经 `execFile` 数组传参**,不拼 shell(避免 markdown/特殊字符注入)。
 10. **dws 失败不许硬刚**:poller 按错误分类退避——`network`/`unknown` 指数退避(封顶 `poll.maxBackoffMs`),`auth`/`pat` 暂停轮询、每 `poll.authPauseMs` 才探测一次并弹本机通知,恢复后自动继续。新增任何"循环调 dws"的路径都必须接入这套退避,**绝不能在鉴权失效时仍每 2s 调用**(会触发 dws 拉浏览器 + 烧调用)。
 11. **等待态会老化**:`WAITING_USER` 超 `timeouts.staleWaitMs`(默认 6h)无人点选即作废(`expireStaleWaits`,在 `getContext` 里跑),否则一旦有等待 poller 永久轮询。
+12. **空闲提醒是独立路径**:任一 **tmux** 会话等待用户输入超 `notify.idleSwitch.afterMs`(默认 30min)且**锁屏**时,弹一条**可点击**本机通知(`maybeIdleNotify`);点击经 `terminal-notifier -execute` 跑 `buildSwitchCommand`(tmux select-window/pane + `open -b <bundleId>`)切回会话。与钉钉遥控**完全解耦**——不注入 meta-prompt、不推钉钉。要点:(a) 用 `idleTurns` 去重——**同轮数的重复 idle hook 不重置 30min 时钟**(否则 idle_prompt 反复触发会让 30min 永远走不到);(b) `UserPromptSubmit` hook → `onUserActivity` 取消计时(防"Claude 正忙"误报),注入 meta-prompt / 用户点选注入时也 `clearIdleTimer`,下一次自然停重新计时;(c) 只对有 `pane` 的会话武装(没 pane 切不过去);(d) 到点未锁屏则每 `recheckMs` 重探,直到锁屏弹一次或等待超 `staleWaitMs` 放弃;弹过一次即 `idleNotified`,不重弹。`terminal-notifier` 未装时 `macNotifyClickable` 退化为不可点击的 osascript 通知。
 
 ## 实测得到的环境约束(踩过的坑)
 
@@ -70,6 +71,7 @@ src/service/launchd.ts           # LaunchAgent plist 生成与加载
 - **dws 鉴权(源码实证,踩过的大坑)**:登录只有 OAuth 扫码/设备流,**不支持 AppKey/AppSecret**;access ~2h、refresh ~30 天,自动静默续期。失败时 dws 把结构化错误写 **stderr** 且退出码非零(`not_authenticated`→exit 2;PAT 行为授权不足→exit 4),**stdout 为空**——所以必须解析 stderr+exitCode 分类(`dwsClient.classifyExecError`),否则只能看到含糊的"调用失败"。曾出事故:周末 token 失效后 dws 每次调用都拉起浏览器登录页,叠加 poller 无退避每 2s 狂刷 → 一天上万次、满屏鉴权页。
 - **host-owned PAT 模式**:`dwsClient` 对每次调用注入 `DINGTALK_DWS_AGENTCODE`(=`dingtalk.agentCode`),使 dws 命中 PAT 墙时返回结构化 JSON(exit 4)而**不拉浏览器/不轮询**(见 dws `internal/auth/channel.go`+`pat_auth_retry.go`)。配套:`dws pat browser-policy --enabled=false` + `dws pat chmod ... --grant-type permanent`。
 - launchd 的 `StandardOut/ErrPath` 必须指向**独立文件**(`daemon.out.log`),不能指向 app 自己写的 `daemon.log`——否则 logger 既写 stderr 又 appendFile、launchd 再把 stderr 重定向进同一文件,每行重复两遍。
+- **可点击通知(空闲提醒)**:osascript `display notification` 点击**无法执行命令**,故用 `terminal-notifier -execute`(可选依赖,`brew install terminal-notifier`)。`-execute` 经 `/bin/sh -c` 跑命令,所以:(1) 两次 tmux 调用之间**不能用 `\;`**(会被 sh 当命令分隔符,把 `select-pane` 当独立命令跑失败),要写成两条独立 `tmux ...; tmux ...`;(2) 命令里 tmux 用**绝对路径**(`/opt/homebrew/bin/tmux`),点击时由通知系统重启 terminal-notifier、PATH 不可靠;(3) 激活终端用 `/usr/bin/open -b <bundleId>`,对已运行的 app **只前台化、不重开实例**,全屏则切到对应 Space。`terminal-notifier` 2.x 用已弃用的通知 API,新 macOS 上**点击动作偶失灵**(通知必弹,失灵的是 click handler)。
 
 ## 约定
 

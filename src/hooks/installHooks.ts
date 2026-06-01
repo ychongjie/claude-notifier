@@ -14,6 +14,8 @@ const REGISTRATIONS: Array<{ event: string; matcher: string }> = [
   { event: 'Notification', matcher: 'idle_prompt' },
   { event: 'Notification', matcher: 'permission_prompt' },
   { event: 'Stop', matcher: '' },
+  // 用户提交输入：让 daemon 知道会话"开始工作了"，取消 30 分钟空闲提醒。
+  { event: 'UserPromptSubmit', matcher: '' },
 ];
 
 /** 用这个标记识别「是我们装的」hook 条目，便于幂等替换。 */

@@ -22,6 +22,17 @@ export interface SessionRecord {
   sessionId: string;
   state: SessionState;
   pane?: PaneId;
+  /** 会话工作目录（来自 hook payload），用于空闲提醒通知里显示是哪一个。 */
+  cwd?: string;
+  // ---- 30 分钟空闲提醒（与钉钉遥控独立的一条本机通知路径）----
+  /** 空闲提醒定时器。 */
+  idleTimer?: ReturnType<typeof setTimeout>;
+  /** 本次等待开始的时刻（ms）。 */
+  waitingSince?: number;
+  /** 上次为之武装定时器的 assistant 轮数，用于忽略"无新进展的重复 hook"不重置时钟。 */
+  idleTurns?: number;
+  /** 本次等待是否已弹过空闲提醒（避免重复刷屏）。 */
+  idleNotified?: boolean;
   /** 当前推送的选项集（WAITING_USER 时有效）。 */
   optionSet?: OptionSet;
   /** 当前推送消息的 openMessageId（用于挂接表情轮询）。 */

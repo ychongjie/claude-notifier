@@ -9,7 +9,7 @@ import type { DwsClient } from '../dingtalk/dwsClient.js';
 import type { TmuxClient } from '../tmux/tmuxClient.js';
 import { pushOptions } from '../dingtalk/push.js';
 import { isScreenLocked } from '../mac/lockState.js';
-import { macNotifyThrottled } from '../mac/notify.js';
+import { macNotifyThrottled, macNotifyClickable, buildSwitchCommand } from '../mac/notify.js';
 import { readTranscript } from '../options/transcript.js';
 import { buildMetaPrompt, makeSentinel } from '../options/metaPrompt.js';
 import { findOptionsBySentinel } from '../options/optionsSchema.js';
@@ -75,6 +75,7 @@ export class SessionManager {
   async onIdleHook(h: IncomingHook): Promise<void> {
     const rec = this.get(h.sessionId);
     if (h.pane) rec.pane = h.pane;
+    if (h.cwd) rec.cwd = h.cwd;
 
     const sid = h.sessionId.slice(0, 8);
 
@@ -102,6 +103,9 @@ export class SessionManager {
       rec.state = 'IDLE';
     }
 
+    // 空闲提醒：这是一次"新的等待"（已排除 GENERATING_OPTIONS 与重复 hook）→ 重置 30 分钟时钟。
+    this.maybeArmIdleTimer(rec, info.assistantTurns);
+
     // 仅锁屏时推送/生成。
     if (this.cfg.notify.onlyWhenLocked) {
       const locked = await isScreenLocked();
@@ -119,6 +123,7 @@ export class SessionManager {
     if (!this.cfg.permission.enabled) return;
     const rec = this.get(h.sessionId);
     if (h.pane) rec.pane = h.pane;
+    if (h.cwd) rec.cwd = h.cwd;
     const sid = h.sessionId.slice(0, 8);
 
     // 无 pane 无法操作菜单 → 跳过。
@@ -175,6 +180,7 @@ export class SessionManager {
     rec.sentinel = sentinel;
     rec.retriesLeft = this.cfg.options.retryOnInvalid;
     this.scheduleGenTimeout(rec);
+    this.clearIdleTimer(rec); // 进入"生成中"，不再算等待用户（产出选项后的 push 会重新武装）
     try {
       await this.tmux.injectLine(rec.pane, buildMetaPrompt(sentinel, this.cfg.options.maxCount), this.cfg.tmux.sendKeysEnterDelayMs);
       this.log.info('已注入 meta-prompt，等待选项产出', { session: sid, sentinel });
@@ -241,6 +247,66 @@ export class SessionManager {
     await this.pushAndWait(rec, FALLBACK_OPTIONS, rec.genTurns ?? 0);
   }
 
+  // ---- 30 分钟空闲提醒（独立于钉钉遥控：任一 tmux 会话等待用户输入过久 → 可点击本机通知）----
+
+  /** 用户在该会话提交了输入（UserPromptSubmit hook）→ 正在工作，取消空闲提醒。 */
+  onUserActivity(h: IncomingHook): void {
+    const rec = this.get(h.sessionId);
+    if (h.pane) rec.pane = h.pane;
+    if (h.cwd) rec.cwd = h.cwd;
+    this.clearIdleTimer(rec);
+  }
+
+  /**
+   * 武装空闲提醒定时器。仅 tmux 会话（有 pane，能切换）才提醒；
+   * 同一轮数的重复 hook 不重置时钟（否则反复 idle 通知会让 30 分钟永远走不到）。
+   */
+  private maybeArmIdleTimer(rec: SessionRecord, turns: number): void {
+    if (!this.cfg.notify.idleSwitch.enabled) return;
+    if (!rec.pane) return; // 非 tmux 会话点了也切不过去 → 不提醒
+    if (rec.idleTurns === turns) return; // 无新进展的重复 hook：不重置时钟也不重弹
+    this.clearIdleTimer(rec);
+    rec.idleTurns = turns;
+    rec.waitingSince = Date.now();
+    rec.idleNotified = false;
+    rec.idleTimer = setTimeout(() => void this.maybeIdleNotify(rec), this.cfg.notify.idleSwitch.afterMs);
+  }
+
+  private clearIdleTimer(rec: SessionRecord): void {
+    if (rec.idleTimer) clearTimeout(rec.idleTimer);
+    rec.idleTimer = undefined;
+  }
+
+  /** 定时器到点：仍是 tmux 等待态 + 锁屏 → 弹一条可点击通知（点击切回该会话）。 */
+  private async maybeIdleNotify(rec: SessionRecord): Promise<void> {
+    rec.idleTimer = undefined;
+    const sid = rec.sessionId.slice(0, 8);
+    if (rec.state === 'INJECTING') return; // 正在处理用户输入，不算等待
+    if (!rec.pane || !(await this.tmux.hasPane(rec.pane))) return; // pane 没了，切不过去
+    const locked = await isScreenLocked();
+    if (locked !== true) {
+      // 未锁屏（或判定不出）：按"只在锁屏时弹"暂不打扰；之后才锁屏的情况靠重探兜住。
+      const since = rec.waitingSince ?? Date.now();
+      if (Date.now() - since > this.cfg.timeouts.staleWaitMs) return; // 等太久了，放弃重探
+      rec.idleTimer = setTimeout(() => void this.maybeIdleNotify(rec), this.cfg.notify.idleSwitch.recheckMs);
+      return;
+    }
+    if (rec.idleNotified) return;
+    rec.idleNotified = true;
+    const ageMin = Math.round((Date.now() - (rec.waitingSince ?? Date.now())) / 60000);
+    const cwdBase = rec.cwd ? (rec.cwd.split('/').filter(Boolean).pop() ?? rec.cwd) : sid;
+    const exec = buildSwitchCommand(rec.pane, this.cfg.notify.idleSwitch.terminalBundleId);
+    const clickable = macNotifyClickable({
+      title: `Claude 已等待输入 ${ageMin} 分钟`,
+      subtitle: cwdBase,
+      message: '点击切回该会话',
+      group: `cn-idle-${rec.sessionId}`,
+      execute: exec ?? undefined,
+      notifierBin: this.cfg.notify.idleSwitch.terminalNotifierBin,
+    });
+    this.log.info('已弹空闲提醒通知', { session: sid, pane: rec.pane, ageMin, clickable: clickable && !!exec });
+  }
+
   private async pushAndWait(
     rec: SessionRecord,
     optionSet: OptionSet,
@@ -274,6 +340,7 @@ export class SessionManager {
     rec.state = 'WAITING_USER';
     rec.optionSet = optionSet;
     rec.pushedAtTurns = turns;
+    this.maybeArmIdleTimer(rec, turns); // 已推送、等待用户在手机点选 → 30 分钟仍无响应则本机提醒
     this.persistState();
     this.log.info('已推送选项，等待用户选择', {
       session: rec.sessionId.slice(0, 8),
@@ -328,6 +395,7 @@ export class SessionManager {
     // 先切到 INJECTING 并清理等待态，避免后续同消息的事件重复触发。
     rec.state = 'INJECTING';
     rec.genTimes = []; // 用户成功介入 → 重置熔断计数
+    this.clearIdleTimer(rec); // 用户已介入 → 取消空闲提醒（下一次自然停会重新武装）
     this.clearWait(rec);
     try {
       if (option.keys) {

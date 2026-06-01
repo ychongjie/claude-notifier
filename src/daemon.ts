@@ -49,6 +49,11 @@ export class Daemon {
   }
 
   private onHook(h: IncomingHook): void {
+    // 用户提交了输入 → 该会话正在工作，取消空闲提醒（下一次自然停会重新计时）。
+    if (h.event === 'UserPromptSubmit') {
+      this.sessions.onUserActivity(h);
+      return;
+    }
     // 工具授权弹窗：推送允许/拒绝，注入对应按键。
     if (h.event === 'Notification' && h.notificationType === 'permission_prompt') {
       void this.sessions.onPermissionPrompt(h);

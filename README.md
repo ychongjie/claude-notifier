@@ -48,6 +48,10 @@ npm run cli -- install-service          # 安装并启动 launchd 常驻服务
 | `dingtalk.agentCode` | host-owned PAT 模式标识(默认 `claude-notifier`)。注入 `DINGTALK_DWS_AGENTCODE`,让 dws 命中 PAT 墙时返回结构化错误而**不拉起浏览器** |
 | `notify.onlyWhenLocked` | **仅锁屏时推送**(默认 true),避免你在电脑前被打扰 |
 | `notify.localNotification` | 鉴权失效/缺授权时弹一条**本机 macOS 通知**(默认 true);此时 dws 已发不出钉钉,靠本机提醒你介入 |
+| `notify.idleSwitch.enabled` | tmux 会话**等待用户输入超过 `afterMs` 且锁屏**时,弹一条可点击的本机通知(默认 true) |
+| `notify.idleSwitch.afterMs` / `recheckMs` | 等待多久后提醒(默认 30min) / 到点时未锁屏的重探间隔(默认 5min,之后才锁屏也能兜住) |
+| `notify.idleSwitch.terminalBundleId` | 点击通知要激活的终端 app bundle id(默认 `com.mitchellh.ghostty`) |
+| `notify.idleSwitch.terminalNotifierBin` | `terminal-notifier` 可执行名/路径;**未安装则退化为不可点击的纯通知** |
 | `poll.maxBackoffMs` / `authPauseMs` | 轮询失败退避上限 / 鉴权失效时暂停探测间隔(默认 1min / 10min) |
 | `timeouts.staleWaitMs` | 等待无人响应多久后自动作废(默认 6h),避免永久轮询 |
 | `emojis.candidates` | 候选表情名(默认 `["1".."5"]`),即选项 key |
@@ -77,6 +81,17 @@ npm run cli -- install-service          # 安装并启动 launchd 常驻服务
 - **拒绝** → 发送 `Escape`(取消 = No)
 
 按键可在 `config.json` 的 `permission.allowKey` / `denyKey` 调整,可用 `permission.enabled:false` 关闭。
+
+### 空闲提醒:点击通知切回会话
+
+任意 **tmux 里的** Claude 会话「等待你输入」超过 30 分钟(`notify.idleSwitch.afterMs`)且**锁屏**时,弹一条本机 macOS 通知。**点击通知** → 自动切到该会话所在的 tmux pane 并把终端 app 拉到前台(全屏 ghostty 会切到对应 Space,**不会重开实例**)。
+
+- 这与「锁屏才推钉钉」是**两套独立逻辑**:钉钉推送让你远程点选项,空闲提醒只是把你**喊回电脑前**那一个会话。
+- 点击切换依赖 [`terminal-notifier`](https://github.com/julienXX/terminal-notifier):`brew install terminal-notifier`。**没装也能跑**——只是退化成不可点击的纯通知(正文带会话目录,提醒你哪个在等)。
+- 只对 **tmux 会话**生效(没 pane 点了也切不过去);非 tmux 会话不弹。
+- 用户一提交输入(`UserPromptSubmit` hook)即取消计时,避免「Claude 正忙」时误报;下一次自然停重新计时。
+
+> ⚠️ `terminal-notifier` 用的是 Apple 已逐步弃用的通知 API,在较新 macOS 上**点击执行动作偶有失灵**(通知本身总会弹,失灵的是点击那一下)。首次用前点一下确认能切窗口。
 
 > ⚠️ **安全提示**:首次使用前请用一个真实权限弹窗验证"拒绝"确实拒绝了(见下)。不同 Claude Code 版本菜单若有差异,改 `denyKey` 即可。
 
