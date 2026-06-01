@@ -59,6 +59,7 @@ export class SessionManager {
 
   /** 供 poller 使用：当前活跃推送消息集合 + 最早时间。 */
   getContext(): PollContext {
+    this.expireStaleWaits(); // 先清理无人响应的陈旧等待，避免永久轮询
     const ids = new Set(this.pushedToSession.keys());
     let earliest: number | undefined;
     for (const id of ids) {
@@ -332,6 +333,27 @@ export class SessionManager {
     } catch (err) {
       this.log.error('注入失败', { err: String(err) });
       rec.state = 'IDLE';
+    }
+  }
+
+  /**
+   * 作废超时无人点选的等待：否则一旦有等待，poller 会永久轮询（周末无人回复 → 一整天每 2s 调 dws）。
+   * 同时这也是 daemon 重启后清掉 stateFile 里历史遗留死等待的入口。
+   */
+  private expireStaleWaits(): void {
+    const now = Date.now();
+    const max = this.cfg.timeouts.staleWaitMs;
+    for (const rec of this.sessions.values()) {
+      if (rec.state !== 'WAITING_USER' || !rec.pushedMessageId) continue;
+      const started = this.pushedCreateMs.get(rec.pushedMessageId) ?? now;
+      if (now - started > max) {
+        this.log.warn('等待超时无人响应，作废该选项', {
+          session: rec.sessionId.slice(0, 8),
+          ageMin: Math.round((now - started) / 60000),
+        });
+        this.clearWait(rec);
+        rec.state = 'IDLE';
+      }
     }
   }
 

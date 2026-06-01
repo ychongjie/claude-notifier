@@ -10,7 +10,9 @@
     "intervalMs": 2000,
     "overlapSlackMs": 5000,
     "listLimit": 20,
-    "processedIdsMax": 500
+    "processedIdsMax": 500,
+    "maxBackoffMs": 60000,
+    "authPauseMs": 600000
   },
   "hookServer": {
     "host": "127.0.0.1",
@@ -31,7 +33,8 @@
   "timeouts": {
     "generationMs": 60000,
     "userWaitMs": 1800000,
-    "cooldownMs": 1500
+    "cooldownMs": 1500,
+    "staleWaitMs": 21600000
   },
   "paths": {
     "logFile": "~/.claude-notifier/daemon.log",

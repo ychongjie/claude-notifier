@@ -28,6 +28,10 @@ function buildPlist(): { plist: string; logPath: string } {
   const configPath = process.env.CN_CONFIG ?? resolve(REPO_ROOT, 'config.json');
   const logDir = resolve(homedir(), '.claude-notifier');
   const logPath = resolve(logDir, 'daemon.log');
+  // launchd 的 stdout/stderr 单独落到这里：daemon 自身已把 stderr 追加进 daemon.log，
+  // 若 plist 也把 stderr 指向 daemon.log，每行会重复两遍。分开后 daemon.log 干净，
+  // 这个文件只兜底捕获启动崩溃 / logger 之前的原始输出。
+  const capturePath = resolve(logDir, 'daemon.out.log');
   mkdirSync(logDir, { recursive: true });
 
   // PATH：node/dws 同目录 + homebrew(tmux,asdf) + /usr/sbin(ioreg) + 标准目录。
@@ -55,8 +59,8 @@ ${argXml}
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Background</string>
-  <key>StandardOutPath</key><string>${xmlEscape(logPath)}</string>
-  <key>StandardErrorPath</key><string>${xmlEscape(logPath)}</string>
+  <key>StandardOutPath</key><string>${xmlEscape(capturePath)}</string>
+  <key>StandardErrorPath</key><string>${xmlEscape(capturePath)}</string>
 </dict>
 </plist>
 `;

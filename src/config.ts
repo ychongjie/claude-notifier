@@ -17,6 +17,10 @@ export const ConfigSchema = z.object({
     overlapSlackMs: z.number().int().nonnegative().default(5000),
     listLimit: z.number().int().positive().default(20),
     processedIdsMax: z.number().int().positive().default(500),
+    // 网络/未知错误时指数退避的上限（防 token/调用失控）。
+    maxBackoffMs: z.number().int().positive().default(60000),
+    // dws 鉴权失效时暂停轮询、每隔这么久探测一次（鉴权无法自修，避免每 2s 反复触发 dws 拉起浏览器登录页）。
+    authPauseMs: z.number().int().positive().default(600000),
   }),
   hookServer: z.object({
     host: z.string().default('127.0.0.1'),
@@ -39,6 +43,8 @@ export const ConfigSchema = z.object({
     generationMs: z.number().int().positive().default(60000),
     userWaitMs: z.number().int().positive().default(1800000),
     cooldownMs: z.number().int().nonnegative().default(1500),
+    // WAITING_USER 超过这么久仍无人点选 → 作废该等待（否则无人回复时永久轮询）。默认 6 小时。
+    staleWaitMs: z.number().int().positive().default(21600000),
   }),
   paths: z.object({
     logFile: z.string().default('~/.claude-notifier/daemon.log'),

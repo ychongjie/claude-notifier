@@ -23,14 +23,26 @@ export function parseDwsTime(s: string): number {
   return new Date(Number(y), Number(mo) - 1, Number(da), Number(h), Number(mi), Number(se)).getTime();
 }
 
+/** 错误分类：daemon 据此决定退避策略（auth 无法自修→长暂停；network→指数退避）。 */
+export type DwsErrorCategory = 'auth' | 'network' | 'unknown';
+
 export class DwsError extends Error {
   readonly reason?: unknown;
   readonly stdout?: string;
-  constructor(message: string, reason?: unknown, stdout?: string) {
+  readonly stderr?: string;
+  readonly exitCode?: number;
+  readonly category: DwsErrorCategory;
+  constructor(
+    message: string,
+    opts: { reason?: unknown; stdout?: string; stderr?: string; exitCode?: number; category?: DwsErrorCategory } = {},
+  ) {
     super(message);
     this.name = 'DwsError';
-    this.reason = reason;
-    this.stdout = stdout;
+    this.reason = opts.reason;
+    this.stdout = opts.stdout;
+    this.stderr = opts.stderr;
+    this.exitCode = opts.exitCode;
+    this.category = opts.category ?? 'unknown';
   }
 }
 
@@ -46,19 +58,51 @@ export class DwsClient {
     try {
       ({ stdout } = await pExecFile(this.bin, args, { maxBuffer: MAX_BUFFER }));
     } catch (err) {
-      throw new DwsError(`dws 调用失败: ${args.join(' ')}`, err);
+      throw this.classifyExecError(args, err);
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(stdout);
     } catch (err) {
-      throw new DwsError('dws 输出不是合法 JSON', err, stdout);
+      throw new DwsError('dws 输出不是合法 JSON', { reason: err, stdout });
     }
     this.detectAuthFailure(parsed);
     return parsed;
   }
 
-  /** 识别 dws 鉴权失效/过期，给出清晰告警（daemon 无法自修，需人工 dws auth login）。 */
+  /**
+   * dws 失败时退出码非零、且把结构化错误写到 **stderr**（如
+   * `{"error":{"category":"auth","reason":"not_authenticated",...}}`）。
+   * 解析出来分类，便于上层（poller）按 auth/network 采取不同退避，并把可读原因带进日志。
+   */
+  private classifyExecError(args: string[], err: unknown): DwsError {
+    const e = err as { stderr?: string | Buffer; code?: number; message?: string };
+    const stderr = (typeof e.stderr === 'string' ? e.stderr : e.stderr?.toString()) ?? '';
+    const exitCode = typeof e.code === 'number' ? e.code : undefined;
+    let category: DwsErrorCategory = 'unknown';
+    let detail = '';
+    try {
+      const j = JSON.parse(stderr) as { error?: { category?: string; reason?: string; message?: string; hint?: string } };
+      const er = j?.error;
+      if (er) {
+        detail = [er.message, er.hint].filter(Boolean).join(' / ');
+        if (er.category === 'auth' || /not_authenticated|auth/i.test(er.reason ?? '')) category = 'auth';
+        else if (/network|timeout/i.test(er.category ?? '') || /timeout/i.test(er.reason ?? '')) category = 'network';
+      }
+    } catch {
+      // stderr 非 JSON，下面按文本特征兜底分类
+    }
+    if (category === 'unknown') {
+      const blob = stderr || (e.message ?? '');
+      if (/not_authenticated|auth login|未登录|登录已过期|gateway_auth_expired/i.test(blob)) category = 'auth';
+      else if (/i\/o timeout|dial tcp|lookup .*timeout|NETWORK_TIMEOUT|connection refused|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|无法连接|超时/i.test(blob))
+        category = 'network';
+    }
+    const msg = `dws 调用失败[${category}]: ${args.slice(0, 3).join(' ')}${detail ? ` — ${detail}` : ''}`;
+    return new DwsError(msg, { reason: err, stderr, exitCode, category });
+  }
+
+  /** 兜底：极少数鉴权错误可能以"成功输出"形式出现在 stdout，这里也扫一遍给出清晰告警。 */
   private detectAuthFailure(parsed: unknown): void {
     const s = JSON.stringify(parsed);
     if (/PAT_\w*?(NO_PERMISSION|RISK)|authenticated"\s*:\s*false|未登录|登录已过期|token.*(expired|invalid)/i.test(s)) {
