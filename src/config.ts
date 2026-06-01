@@ -11,6 +11,9 @@ export const ConfigSchema = z.object({
     userDisplayName: z.string().min(1),
     dwsBin: z.string().min(1).default('dws'),
     pushTitlePrefix: z.string().default('[CN]'),
+    // host-owned PAT 模式标识：非空即注入 DINGTALK_DWS_AGENTCODE 给 dws，使其命中 PAT 墙时
+    // 返回结构化 JSON(exit=4)而非拉起浏览器/轮询(见 dws internal/auth/channel.go)。
+    agentCode: z.string().default('claude-notifier'),
   }),
   poll: z.object({
     intervalMs: z.number().int().positive().default(2000),
@@ -57,6 +60,8 @@ export const ConfigSchema = z.object({
     .object({
       // 仅在 Mac 锁屏时推送，避免你在电脑前工作时被打扰。
       onlyWhenLocked: z.boolean().default(true),
+      // 鉴权失效/需要 PAT 授权时弹一条本机 macOS 通知（此时 dws 已发不出钉钉，靠本机提醒你介入）。
+      localNotification: z.boolean().default(true),
     })
     .default({}),
   permission: z

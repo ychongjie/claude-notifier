@@ -45,7 +45,11 @@ npm run cli -- install-service          # 安装并启动 launchd 常驻服务
 | `dingtalk.openConversationId` | 推送/轮询的钉钉群会话 id |
 | `dingtalk.userId` / `userDisplayName` | 你的 userId / 显示名(用于识别你点的表情) |
 | `dingtalk.dwsBin` | dws 可执行名,默认 `dws` |
+| `dingtalk.agentCode` | host-owned PAT 模式标识(默认 `claude-notifier`)。注入 `DINGTALK_DWS_AGENTCODE`,让 dws 命中 PAT 墙时返回结构化错误而**不拉起浏览器** |
 | `notify.onlyWhenLocked` | **仅锁屏时推送**(默认 true),避免你在电脑前被打扰 |
+| `notify.localNotification` | 鉴权失效/缺授权时弹一条**本机 macOS 通知**(默认 true);此时 dws 已发不出钉钉,靠本机提醒你介入 |
+| `poll.maxBackoffMs` / `authPauseMs` | 轮询失败退避上限 / 鉴权失效时暂停探测间隔(默认 1min / 10min) |
+| `timeouts.staleWaitMs` | 等待无人响应多久后自动作废(默认 6h),避免永久轮询 |
 | `emojis.candidates` | 候选表情名(默认 `["1".."5"]`),即选项 key |
 | `options.maxCount` / `retryOnInvalid` | 最多选项数(≤5) / JSON 非法重试次数 |
 | `timeouts.generationMs` | 等 Claude 产出选项的超时(超时用固定选项) |
@@ -87,6 +91,24 @@ npm run cli -- start              # 前台运行 daemon(调试用)
 ```
 
 日志:`~/.claude-notifier/daemon.log`。
+
+## 鉴权与无人值守
+
+dws 用 OAuth(扫码/设备流)登录,access token ~2h、refresh token ~30 天,**会自动静默续期**——正常情况下可无人长跑。两个要点:
+
+- **host-owned PAT 模式(默认开)**:`dingtalk.agentCode` 非空时,daemon 给 dws 注入 `DINGTALK_DWS_AGENTCODE`。命中"行为授权(PAT)"墙时 dws **只返回结构化错误、不拉起浏览器、不轮询**(交给宿主)。这根除了"鉴权失效时每次调用弹一个钉钉登录页"的风暴。
+- **失败即暂停 + 本机通知**:轮询遇到鉴权失效(`auth`,需 `dws auth login`)或缺授权(`pat`,需 `dws pat chmod`)时,daemon **暂停轮询、每 10min 才探测一次**(不再每 2s 硬刚),并弹一条本机 macOS 通知提醒你;处理后**自动恢复**,无需重启。
+
+**一次性设置(登录后做一遍):**
+
+```bash
+dws auth login                                  # 扫码登录(约每 30 天一次)
+dws pat browser-policy --enabled=false          # 关掉 PAT 撞墙时的浏览器弹窗(全局兜底)
+dws pat chmod chat.message:send chat.message:list \
+  --grant-type permanent --agentCode claude-notifier   # 永久授予 daemon 所需 scope
+```
+
+> ⚠️ **无法 100% 免登录**:dws 不支持 AppKey/AppSecret 登录,base token 真正失效(满 30 天、被吊销、或长断网期间续期链断裂)后仍需手动 `dws auth login` 一次。本机通知会在那时提醒你。
 
 ## 已知限制
 

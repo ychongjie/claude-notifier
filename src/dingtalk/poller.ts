@@ -3,6 +3,7 @@ import type { Config } from '../config.js';
 import type { Logger } from '../logger.js';
 import { DwsClient, DwsError } from './dwsClient.js';
 import { InboundTracker } from './inboundDedup.js';
+import { macNotifyThrottled } from '../mac/notify.js';
 import type { InboundEvent } from '../session/types.js';
 
 export interface PollContext {
@@ -88,16 +89,19 @@ export class Poller {
   private onPollFailure(err: unknown): void {
     this.consecutiveFails++;
     const category = err instanceof DwsError ? err.category : 'unknown';
-    // 鉴权失效无法自修（且每次调用都可能让 dws 拉起浏览器登录页）→ 长暂停、只偶尔探测，恢复后自动继续。
-    if (category === 'auth') {
+    // 鉴权失效/缺 PAT 授权都无法自修（auth 还可能让 dws 拉起浏览器）→ 长暂停、只偶尔探测，恢复后自动继续。
+    if (category === 'auth' || category === 'pat') {
       const wait = this.cfg.poll.authPauseMs;
       this.nextPollAt = Date.now() + wait;
       if (!this.authPaused) {
         this.authPaused = true;
-        this.log.error(
-          `dws 鉴权失效：请在终端运行「dws auth login」。轮询已暂停，每 ${Math.round(wait / 1000)}s 探测一次，登录后自动恢复。`,
-          { err: String(err) },
-        );
+        const action = category === 'pat' ? 'dws pat chmod（授予所需权限）' : 'dws auth login';
+        this.log.error(`dws ${category} 失效：请在终端运行「${action}」。轮询已暂停，每 ${Math.round(wait / 1000)}s 探测一次，处理后自动恢复。`, {
+          err: String(err),
+        });
+        if (this.cfg.notify.localNotification) {
+          macNotifyThrottled('claude-notifier 鉴权失效', `请运行 ${action} 后恢复手机遥控`);
+        }
       }
       return;
     }

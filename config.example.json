@@ -4,7 +4,8 @@
     "userId": "chongjie.yuan",
     "userDisplayName": "袁崇杰",
     "dwsBin": "dws",
-    "pushTitlePrefix": "[CN]"
+    "pushTitlePrefix": "[CN]",
+    "agentCode": "claude-notifier"
   },
   "poll": {
     "intervalMs": 2000,
@@ -44,7 +45,8 @@
     "sentinelPrefix": "CN_OPTIONS_"
   },
   "notify": {
-    "onlyWhenLocked": true
+    "onlyWhenLocked": true,
+    "localNotification": true
   },
   "permission": {
     "enabled": true,

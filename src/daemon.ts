@@ -19,7 +19,7 @@ export class Daemon {
     private readonly cfg: Config,
     private readonly log: Logger,
   ) {
-    this.dws = new DwsClient(cfg.dingtalk.dwsBin, log);
+    this.dws = new DwsClient(cfg.dingtalk.dwsBin, log, cfg.dingtalk.agentCode);
     this.tmux = new TmuxClient(log);
     this.sessions = new SessionManager(cfg, log, this.dws, this.tmux);
     this.poller = new Poller(

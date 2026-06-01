@@ -23,8 +23,13 @@ export function parseDwsTime(s: string): number {
   return new Date(Number(y), Number(mo) - 1, Number(da), Number(h), Number(mi), Number(se)).getTime();
 }
 
-/** 错误分类：daemon 据此决定退避策略（auth 无法自修→长暂停；network→指数退避）。 */
-export type DwsErrorCategory = 'auth' | 'network' | 'unknown';
+/**
+ * 错误分类：daemon 据此决定退避策略。
+ * - auth：未登录/凭证失效（exit 2），需人工 dws auth login → 长暂停。
+ * - pat：缺少行为授权（exit 4，host-owned PAT 模式下返回结构化 JSON），需 dws pat chmod → 长暂停。
+ * - network：网络/超时 → 指数退避。
+ */
+export type DwsErrorCategory = 'auth' | 'pat' | 'network' | 'unknown';
 
 export class DwsError extends Error {
   readonly reason?: unknown;
@@ -50,13 +55,21 @@ export class DwsClient {
   constructor(
     private readonly bin: string,
     private readonly log: Logger,
+    /** 非空则注入 DINGTALK_DWS_AGENTCODE，让 dws 以 host-owned PAT 模式运行（不拉浏览器）。 */
+    private readonly agentCode?: string,
   ) {}
+
+  /** dws 子进程的环境：继承当前环境，并按需注入 host-owned PAT 标识。 */
+  private childEnv(): NodeJS.ProcessEnv | undefined {
+    if (!this.agentCode) return undefined;
+    return { ...process.env, DINGTALK_DWS_AGENTCODE: this.agentCode };
+  }
 
   private async run(args: string[]): Promise<unknown> {
     this.log.debug('dws run', { args });
     let stdout: string;
     try {
-      ({ stdout } = await pExecFile(this.bin, args, { maxBuffer: MAX_BUFFER }));
+      ({ stdout } = await pExecFile(this.bin, args, { maxBuffer: MAX_BUFFER, env: this.childEnv() }));
     } catch (err) {
       throw this.classifyExecError(args, err);
     }
@@ -81,20 +94,25 @@ export class DwsClient {
     const exitCode = typeof e.code === 'number' ? e.code : undefined;
     let category: DwsErrorCategory = 'unknown';
     let detail = '';
+    // dws 退出码契约：4=PAT 行为授权不足（host-owned 模式返回结构化 JSON），2=auth 未登录。
+    if (exitCode === 4) category = 'pat';
     try {
       const j = JSON.parse(stderr) as { error?: { category?: string; reason?: string; message?: string; hint?: string } };
       const er = j?.error;
       if (er) {
         detail = [er.message, er.hint].filter(Boolean).join(' / ');
-        if (er.category === 'auth' || /not_authenticated|auth/i.test(er.reason ?? '')) category = 'auth';
-        else if (/network|timeout/i.test(er.category ?? '') || /timeout/i.test(er.reason ?? '')) category = 'network';
+        if (category === 'unknown') {
+          if (er.category === 'auth' || /not_authenticated|auth/i.test(er.reason ?? '')) category = 'auth';
+          else if (/network|timeout/i.test(er.category ?? '') || /timeout/i.test(er.reason ?? '')) category = 'network';
+        }
       }
     } catch {
       // stderr 非 JSON，下面按文本特征兜底分类
     }
     if (category === 'unknown') {
       const blob = stderr || (e.message ?? '');
-      if (/not_authenticated|auth login|未登录|登录已过期|gateway_auth_expired/i.test(blob)) category = 'auth';
+      if (/PAT_\w*|pat.*(auth|scope|permission)|行为授权|需要.*授权/i.test(blob)) category = 'pat';
+      else if (/not_authenticated|auth login|未登录|登录已过期|gateway_auth_expired/i.test(blob)) category = 'auth';
       else if (/i\/o timeout|dial tcp|lookup .*timeout|NETWORK_TIMEOUT|connection refused|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|无法连接|超时/i.test(blob))
         category = 'network';
     }

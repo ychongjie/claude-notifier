@@ -4,10 +4,12 @@ import { dirname } from 'node:path';
 import type { Config } from '../config.js';
 import { expandHome } from '../config.js';
 import type { Logger } from '../logger.js';
+import { DwsError } from '../dingtalk/dwsClient.js';
 import type { DwsClient } from '../dingtalk/dwsClient.js';
 import type { TmuxClient } from '../tmux/tmuxClient.js';
 import { pushOptions } from '../dingtalk/push.js';
 import { isScreenLocked } from '../mac/lockState.js';
+import { macNotifyThrottled } from '../mac/notify.js';
 import { readTranscript } from '../options/transcript.js';
 import { buildMetaPrompt, makeSentinel } from '../options/metaPrompt.js';
 import { findOptionsBySentinel } from '../options/optionsSchema.js';
@@ -251,6 +253,12 @@ export class SessionManager {
       await pushOptions(this.dws, this.cfg, { sessionId: rec.sessionId, optionSet, marker, kind });
     } catch (err) {
       this.log.error('推送选项失败', { err: String(err) });
+      // 推送失败若是鉴权/授权问题，弹本机通知提醒（此时钉钉已发不出，只能靠本机）。
+      const cat = err instanceof DwsError ? err.category : 'unknown';
+      if ((cat === 'auth' || cat === 'pat') && this.cfg.notify.localNotification) {
+        const action = cat === 'pat' ? 'dws pat chmod' : 'dws auth login';
+        macNotifyThrottled('claude-notifier 推送失败', `dws ${cat} 失效，请运行 ${action}`);
+      }
       return;
     }
     // 轮询 list 找到刚推送的那条消息（按 marker），拿 openMessageId 并设表情基线。
