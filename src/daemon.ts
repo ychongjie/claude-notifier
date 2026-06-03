@@ -18,9 +18,14 @@ const REAP_MS = 2000;
 /** token/时长 增量解析周期（ms）。 */
 const USAGE_MS = 4000;
 
-/** 从 pane 可见内容识别 Claude Code 状态行里的「后台 shell 在跑」(如 "1 shell still running" / "1 shell · ↓ to manage")。 */
+/**
+ * 识别 Claude Code 输入框页脚里的「后台 shell 在跑」(如 "… · 1 shell · ↓ to manage")。
+ * 只看**底部若干行**(页脚区)且要求同一行同时有「N shell」与管理提示「manage」——
+ * 避免命中对话/scrollback 里偶然出现的 "1 shell still running"(那只是文字,无 manage)。
+ */
 function hasBackgroundShell(paneText: string): boolean {
-  return /[1-9]\d* shells?(?: still running| ·)/.test(paneText);
+  const lines = paneText.split('\n');
+  return lines.slice(-8).some((l) => /[1-9]\d* shells?\b/.test(l) && /manage/.test(l));
 }
 
 export class Daemon {
