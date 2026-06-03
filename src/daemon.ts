@@ -93,13 +93,13 @@ export class Daemon {
     return { ok: true };
   }
 
-  /** 周期性剔除 pane 已消失的会话（关窗口/kill 后 ~REAP_MS 内从列表消失）。 */
-  private async reapDeadPanes(): Promise<void> {
+  /** 周期性同步 tmux pane 信息：剔除已关闭窗口的会话 + 刷新 session 名/启动目录。 */
+  private async syncPaneInfo(): Promise<void> {
     try {
-      const live = await this.tmux.listPaneIds(); // tmux 异常会抛出 → 不误删；只有 server 在跑且确无该 pane 才剔除
-      this.activity.reapMissingPanes(live);
+      const info = await this.tmux.listPaneInfo(); // tmux 异常会抛出 → 不误删；只有 server 在跑且确无该 pane 才剔除
+      this.activity.syncPanes(info);
     } catch {
-      /* tmux 不可用（如 server 没起）：跳过本轮探活 */
+      /* tmux 不可用（如 server 没起）：跳过本轮 */
     }
   }
 
@@ -112,7 +112,7 @@ export class Daemon {
     this.sessions.restoreState(); // 恢复重启前未决的等待
     await this.hookServer.start();
     this.poller.start();
-    this.reapTimer = setInterval(() => void this.reapDeadPanes(), REAP_MS);
+    this.reapTimer = setInterval(() => void this.syncPaneInfo(), REAP_MS);
     this.log.info('daemon 已启动', { group: this.cfg.dingtalk.openConversationId });
     const shutdown = () => {
       this.log.info('收到退出信号，关闭中…');

@@ -20,15 +20,28 @@ export class TmuxClient {
     return stdout;
   }
 
-  /** 所有存活 pane 的 id 集合（供展示态批量探活，一次调用判全部，省得逐个 hasPane）。 */
-  async listPaneIds(): Promise<Set<string>> {
-    const out = await this.run(['list-panes', '-a', '-F', '#{pane_id}']);
-    return new Set(
-      out
-        .split('\n')
-        .map((s) => s.trim())
-        .filter(Boolean),
-    );
+  /**
+   * 所有存活 pane 的信息：pane_id → { session 名, current_path }。
+   * 供展示态一次性批量同步（探活 + 刷新 session 名 + 启动目录）。
+   */
+  async listPaneInfo(): Promise<Map<string, { session: string; path: string }>> {
+    // 空格分隔（pane_id 与 session_name 无空格；path 取剩余部分，容忍路径含空格）。
+    // 不用 \t：launchd 下 \t 会退化成空格，split('\t') 失配。
+    const out = await this.run(['list-panes', '-a', '-F', '#{pane_id} #{session_name} #{pane_current_path}']);
+    const m = new Map<string, { session: string; path: string }>();
+    for (const line of out.split('\n')) {
+      const s = line.trim();
+      if (!s) continue;
+      const i1 = s.indexOf(' ');
+      if (i1 < 0) continue;
+      const pane = s.slice(0, i1);
+      const rest = s.slice(i1 + 1);
+      const i2 = rest.indexOf(' ');
+      const session = i2 < 0 ? rest : rest.slice(0, i2);
+      const path = i2 < 0 ? '' : rest.slice(i2 + 1);
+      m.set(pane, { session, path });
+    }
+    return m;
   }
 
   /** 探测 pane 是否还在。 */

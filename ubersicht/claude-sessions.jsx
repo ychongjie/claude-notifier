@@ -39,10 +39,20 @@ const STATUS = {
   waiting_permission: { dot: '#f85149', label: '等待授权' },
 };
 
-const cwdName = (cwd, sid) => {
-  if (!cwd) return sid ? sid.slice(0, 8) : '—';
+const baseName = (cwd) => {
+  if (!cwd) return '';
   const parts = cwd.split('/').filter(Boolean);
   return parts.length ? parts[parts.length - 1] : cwd;
+};
+// 末级目录名；重名时补一层父级(test/safeline-3 vs gitlab/safeline-3)区分。
+const dirLabel = (s, collisions) => {
+  if (!s.cwd) return '';
+  const b = baseName(s.cwd);
+  if (collisions.has(b)) {
+    const parts = s.cwd.split('/').filter(Boolean);
+    if (parts.length >= 2) return parts.slice(-2).join('/');
+  }
+  return b;
 };
 
 const fmtAge = (since) => {
@@ -78,6 +88,13 @@ export const render = ({ output }) => {
     );
   }
   const sessions = data.sessions || [];
+  // 统计重名的末级目录,用于决定哪些要补父级。
+  const counts = {};
+  sessions.forEach((s) => {
+    const b = baseName(s.cwd);
+    if (b) counts[b] = (counts[b] || 0) + 1;
+  });
+  const collisions = new Set(Object.keys(counts).filter((b) => counts[b] > 1));
   return (
     <div style={wrap}>
       <div style={header}>
@@ -89,6 +106,10 @@ export const render = ({ output }) => {
       ) : (
         sessions.map((s) => {
           const meta = STATUS[s.status] || { dot: '#6e7681', label: s.status };
+          const dir = dirLabel(s, collisions);
+          const title = s.tmuxSession || dir || (s.sessionId ? s.sessionId.slice(0, 8) : '—');
+          // 标题已是 tmux session 名时,目录另起一行;否则目录已在标题里,不再重复。
+          const showDir = dir && s.tmuxSession;
           return (
             <div
               key={s.sessionId}
@@ -99,9 +120,10 @@ export const render = ({ output }) => {
               <div style={dotStyle(meta.dot)} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={titleRow}>
-                  <div style={name}>{cwdName(s.cwd, s.sessionId)}</div>
+                  <div style={name}>{title}</div>
                   <div style={age}>{fmtAge(s.statusSince)}</div>
                 </div>
+                {showDir ? <div style={sub}>{dir}</div> : null}
                 <div style={sub}>
                   {meta.label}
                   {s.pane ? ` · ${s.pane}` : ''}

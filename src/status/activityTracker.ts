@@ -21,8 +21,11 @@ export interface SessionActivity {
   currentTool?: string;
   /** running 时的简述（命令 / 文件路径等，已截断）。 */
   toolDetail?: string;
+  /** 启动目录：优先取 tmux pane 的 current_path（稳定，不随 Claude cd 漂移），无 pane 时退回 hook cwd。 */
   cwd?: string;
   pane?: string;
+  /** 所属 tmux session 名（由 reaper 周期性从 pane 同步）。 */
+  tmuxSession?: string;
   /** 首次见到该会话的时刻（ms）。 */
   startedAt: number;
   /** 最近一次事件时刻（ms），用于排序与陈旧清理。 */
@@ -37,11 +40,15 @@ type Listener = () => void;
 const STALE_MS = 12 * 60 * 60 * 1000;
 /** 落盘防抖窗口（ms）：突发事件合并成一次写。 */
 const SAVE_DEBOUNCE_MS = 800;
+/** pane 连续缺席这么多次探活才剔除（防瞬时 tmux 读偏差误删存活会话）。 */
+const MISS_LIMIT = 2;
 
 export class ActivityTracker {
   private readonly map = new Map<string, SessionActivity>();
   private readonly listeners = new Set<Listener>();
   private saveTimer?: ReturnType<typeof setTimeout>;
+  /** pane 连续多少次探活缺席的计数（瞬时 tmux 读偏差不立即删，连续 MISS_LIMIT 次才删）。 */
+  private readonly missStreak = new Map<string, number>();
 
   /** persistPath 给定时持久化到磁盘（daemon 重启后恢复）；不给则纯内存。 */
   constructor(
@@ -79,7 +86,9 @@ export class ActivityTracker {
       this.map.set(h.sessionId, a);
     }
     if (h.pane) a.pane = h.pane;
-    if (h.cwd) a.cwd = h.cwd;
+    // hook cwd 会随 Claude `cd` 漂移；只用它当「无 pane 会话」的兜底,且首次写入后不再覆盖。
+    // 有 pane 的会话由 syncPanes 用 tmux pane_current_path（稳定的启动目录）权威覆盖。
+    if (h.cwd && !a.cwd) a.cwd = h.cwd;
     a.lastActivityAt = t;
     return a;
   }
@@ -144,20 +153,39 @@ export class ActivityTracker {
   }
 
   /**
-   * 剔除 pane 已消失的会话（窗口被关/kill 时即时清理）。
-   * livePaneIds = 当前所有存活 tmux pane id 的集合。只对"记录了 pane"的会话判定，
-   * 无 pane 的会话（非 tmux）不受影响，靠 STALE_MS 兜底。
+   * 用当前 tmux pane 信息同步：(a) 剔除 pane 已消失的会话(关窗口/kill 即时清理);
+   * (b) 给存活会话刷新 tmuxSession 名 + cwd(= pane_current_path,稳定的启动目录,自愈 hook cwd 漂移)。
+   * paneInfo: pane_id → { session, path }。无 pane 的会话(非 tmux)不受影响,靠 STALE_MS 兜底。
    */
-  reapMissingPanes(livePaneIds: Set<string>): void {
-    let removed = false;
+  syncPanes(paneInfo: Map<string, { session: string; path: string }>): void {
+    let changed = false;
     for (const [id, a] of this.map) {
-      if (a.pane && !livePaneIds.has(a.pane)) {
-        this.map.delete(id);
-        removed = true;
-        this.log?.debug('会话 pane 消失，移出列表', { session: id.slice(0, 8), pane: a.pane });
+      if (!a.pane) continue;
+      const info = paneInfo.get(a.pane);
+      if (!info) {
+        // 连续缺席 MISS_LIMIT 次才删——单次 tmux 读偏差不误删存活会话。
+        const miss = (this.missStreak.get(id) ?? 0) + 1;
+        if (miss >= MISS_LIMIT) {
+          this.map.delete(id);
+          this.missStreak.delete(id);
+          changed = true;
+          this.log?.debug('会话 pane 消失，移出列表', { session: id.slice(0, 8), pane: a.pane });
+        } else {
+          this.missStreak.set(id, miss);
+        }
+        continue;
+      }
+      this.missStreak.delete(id); // pane 在 → 清零缺席计数
+      if (info.session && a.tmuxSession !== info.session) {
+        a.tmuxSession = info.session;
+        changed = true;
+      }
+      if (info.path && a.cwd !== info.path) {
+        a.cwd = info.path; // pane 路径权威覆盖（修正 Claude cd 造成的 hook cwd 漂移）
+        changed = true;
       }
     }
-    if (removed) this.changed();
+    if (changed) this.changed();
   }
 
   /** 按 sessionId 取记录（供"点击切回会话"解析 pane）。 */
