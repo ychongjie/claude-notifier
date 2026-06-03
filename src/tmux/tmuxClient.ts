@@ -20,6 +20,17 @@ export class TmuxClient {
     return stdout;
   }
 
+  /** 所有存活 pane 的 id 集合（供展示态批量探活，一次调用判全部，省得逐个 hasPane）。 */
+  async listPaneIds(): Promise<Set<string>> {
+    const out = await this.run(['list-panes', '-a', '-F', '#{pane_id}']);
+    return new Set(
+      out
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+  }
+
   /** 探测 pane 是否还在。 */
   async hasPane(pane: PaneId): Promise<boolean> {
     try {

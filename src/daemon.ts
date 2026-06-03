@@ -1,5 +1,7 @@
 // 常驻守护进程。M2：hook → 锁屏门控推送固定选项 → 轮询识别表情/数字 → tmux 注入。
+import { dirname, join } from 'node:path';
 import type { Config } from './config.js';
+import { expandHome } from './config.js';
 import type { Logger } from './logger.js';
 import { DwsClient } from './dingtalk/dwsClient.js';
 import { TmuxClient } from './tmux/tmuxClient.js';
@@ -10,14 +12,19 @@ import { SessionManager } from './session/sessionManager.js';
 import { ActivityTracker } from './status/activityTracker.js';
 import { activateApp, focusWindowViaDock } from './mac/notify.js';
 
+/** pane 探活周期（ms）：与挂件 2s 刷新同量级，关窗口后约这么久从列表消失。 */
+const REAP_MS = 2000;
+
 export class Daemon {
   private readonly dws: DwsClient;
   private readonly tmux: TmuxClient;
   private readonly hookServer: HookServer;
   private readonly sessions: SessionManager;
   private readonly poller: Poller;
-  /** 展示态（桌面控件数据源），与控制状态机解耦。 */
-  private readonly activity = new ActivityTracker();
+  /** 展示态（桌面控件数据源），与控制状态机解耦。持久化到 stateFile 同目录的 activity.json。 */
+  private readonly activity: ActivityTracker;
+  /** pane 探活定时器：周期性剔除 pane 已消失的会话。 */
+  private reapTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     private readonly cfg: Config,
@@ -25,6 +32,7 @@ export class Daemon {
   ) {
     this.dws = new DwsClient(cfg.dingtalk.dwsBin, log, cfg.dingtalk.agentCode);
     this.tmux = new TmuxClient(log);
+    this.activity = new ActivityTracker(join(dirname(expandHome(cfg.paths.stateFile)), 'activity.json'), log);
     this.sessions = new SessionManager(cfg, log, this.dws, this.tmux);
     this.poller = new Poller(
       this.dws,
@@ -85,17 +93,31 @@ export class Daemon {
     return { ok: true };
   }
 
+  /** 周期性剔除 pane 已消失的会话（关窗口/kill 后 ~REAP_MS 内从列表消失）。 */
+  private async reapDeadPanes(): Promise<void> {
+    try {
+      const live = await this.tmux.listPaneIds(); // tmux 异常会抛出 → 不误删；只有 server 在跑且确无该 pane 才剔除
+      this.activity.reapMissingPanes(live);
+    } catch {
+      /* tmux 不可用（如 server 没起）：跳过本轮探活 */
+    }
+  }
+
   async start(): Promise<void> {
     this.hookServer.setStatusProvider(() => this.buildStatus());
     this.hookServer.setSwitchHandler((sid) => this.switchToSession(sid));
     // 展示态变化即向 SSE 客户端推送一帧。
     this.activity.subscribe(() => this.hookServer.broadcast(this.buildStatus()));
+    this.activity.load(); // 恢复重启前的会话列表（死会话由 reaper / STALE_MS 清掉）
     this.sessions.restoreState(); // 恢复重启前未决的等待
     await this.hookServer.start();
     this.poller.start();
+    this.reapTimer = setInterval(() => void this.reapDeadPanes(), REAP_MS);
     this.log.info('daemon 已启动', { group: this.cfg.dingtalk.openConversationId });
     const shutdown = () => {
       this.log.info('收到退出信号，关闭中…');
+      if (this.reapTimer) clearInterval(this.reapTimer);
+      this.activity.saveNow(); // 落盘最新列表
       this.poller.stop();
       void this.hookServer.stop().then(() => process.exit(0));
     };

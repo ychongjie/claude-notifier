@@ -2,6 +2,9 @@
 // 与 SessionManager 的安全控制状态机（IDLE/WAITING_USER…）**完全解耦**——
 // 只读 hook、只写自己的 map，绝不触发注入/推送/锁屏门控/轮询。
 // 给桌面控件（Übersicht / 未来的置顶窗口）当数据源用。
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
+import type { Logger } from '../logger.js';
 import type { IncomingHook } from '../hooks/hookTypes.js';
 import { describeToolUse } from '../options/transcript.js';
 
@@ -32,10 +35,19 @@ type Listener = () => void;
 
 /** 超过这个时长无任何事件的会话视为已死，从列表剔除——兜底未发 SessionEnd 的情况（如直接关终端/kill）。 */
 const STALE_MS = 12 * 60 * 60 * 1000;
+/** 落盘防抖窗口（ms）：突发事件合并成一次写。 */
+const SAVE_DEBOUNCE_MS = 800;
 
 export class ActivityTracker {
   private readonly map = new Map<string, SessionActivity>();
   private readonly listeners = new Set<Listener>();
+  private saveTimer?: ReturnType<typeof setTimeout>;
+
+  /** persistPath 给定时持久化到磁盘（daemon 重启后恢复）；不给则纯内存。 */
+  constructor(
+    private readonly persistPath?: string,
+    private readonly log?: Logger,
+  ) {}
 
   /** 订阅状态变化（供 SSE 广播）。返回取消订阅函数。 */
   subscribe(fn: Listener): () => void {
@@ -51,6 +63,12 @@ export class ActivityTracker {
         /* 监听器异常不影响跟踪 */
       }
     }
+  }
+
+  /** 状态变了：通知订阅者 + 安排落盘。 */
+  private changed(): void {
+    this.emit();
+    this.scheduleSave();
   }
 
   private upsert(h: IncomingHook): SessionActivity {
@@ -77,7 +95,7 @@ export class ActivityTracker {
     }
   }
 
-  /** 旁路观察一个 hook 事件，更新展示态。会触发订阅者（广播）。 */
+  /** 旁路观察一个 hook 事件，更新展示态。会触发订阅者（广播）+ 落盘。 */
   observe(h: IncomingHook): void {
     switch (h.event) {
       case 'SessionStart': {
@@ -87,7 +105,7 @@ export class ActivityTracker {
       }
       case 'SessionEnd': {
         // 会话结束 → 从列表移除（顺带解决"session 永不清理"的历史问题）。
-        if (this.map.delete(h.sessionId)) this.emit();
+        if (this.map.delete(h.sessionId)) this.changed();
         return;
       }
       case 'UserPromptSubmit': {
@@ -122,7 +140,24 @@ export class ActivityTracker {
       default:
         return; // 未知事件不影响展示态
     }
-    this.emit();
+    this.changed();
+  }
+
+  /**
+   * 剔除 pane 已消失的会话（窗口被关/kill 时即时清理）。
+   * livePaneIds = 当前所有存活 tmux pane id 的集合。只对"记录了 pane"的会话判定，
+   * 无 pane 的会话（非 tmux）不受影响，靠 STALE_MS 兜底。
+   */
+  reapMissingPanes(livePaneIds: Set<string>): void {
+    let removed = false;
+    for (const [id, a] of this.map) {
+      if (a.pane && !livePaneIds.has(a.pane)) {
+        this.map.delete(id);
+        removed = true;
+        this.log?.debug('会话 pane 消失，移出列表', { session: id.slice(0, 8), pane: a.pane });
+      }
+    }
+    if (removed) this.changed();
   }
 
   /** 按 sessionId 取记录（供"点击切回会话"解析 pane）。 */
@@ -133,9 +168,58 @@ export class ActivityTracker {
   /** 快照：先剔除陈旧会话，再按最近活动倒序，最新的在最前。 */
   snapshot(): SessionActivity[] {
     const cutoff = Date.now() - STALE_MS;
+    let pruned = false;
     for (const [id, a] of this.map) {
-      if (a.lastActivityAt < cutoff) this.map.delete(id);
+      if (a.lastActivityAt < cutoff) {
+        this.map.delete(id);
+        pruned = true;
+      }
     }
+    if (pruned) this.scheduleSave();
     return [...this.map.values()].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  }
+
+  // ---- 持久化：daemon 重启后恢复列表（恢复的死会话由 reapMissingPanes / STALE_MS 清掉） ----
+
+  /** 从磁盘恢复（在 daemon start 时调一次）。文件缺失/损坏则静默从空开始。 */
+  load(): void {
+    if (!this.persistPath) return;
+    try {
+      const raw = readFileSync(this.persistPath, 'utf8');
+      const arr = JSON.parse(raw) as SessionActivity[];
+      if (!Array.isArray(arr)) return;
+      const cutoff = Date.now() - STALE_MS;
+      for (const a of arr) {
+        if (a && typeof a.sessionId === 'string' && a.lastActivityAt > cutoff) {
+          this.map.set(a.sessionId, a);
+        }
+      }
+      this.log?.info('已恢复展示态会话列表', { count: this.map.size });
+    } catch {
+      /* 文件不存在或损坏：从空开始 */
+    }
+  }
+
+  private scheduleSave(): void {
+    if (!this.persistPath || this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = undefined;
+      this.saveNow();
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  /** 立即同步落盘（防抖到点 / daemon 退出时调）。 */
+  saveNow(): void {
+    if (!this.persistPath) return;
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = undefined;
+    }
+    try {
+      mkdirSync(dirname(this.persistPath), { recursive: true });
+      writeFileSync(this.persistPath, JSON.stringify([...this.map.values()]));
+    } catch (err) {
+      this.log?.warn('展示态落盘失败', { err: String(err) });
+    }
   }
 }
