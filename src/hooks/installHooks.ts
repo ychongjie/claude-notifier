@@ -14,7 +14,7 @@ const REGISTRATIONS: Array<{ event: string; matcher: string }> = [
   { event: 'Notification', matcher: 'idle_prompt' },
   { event: 'Notification', matcher: 'permission_prompt' },
   { event: 'Stop', matcher: '' },
-  // 用户提交输入：让 daemon 知道会话"开始工作了"，取消 30 分钟空闲提醒。
+  // 用户提交输入：daemon 据此把会话标记为「思考中」并刷新 pane/cwd。
   { event: 'UserPromptSubmit', matcher: '' },
   // 以下仅供桌面控件的"实时运行状态"展示（ActivityTracker 旁路观察，不参与遥控/推送）。
   { event: 'SessionStart', matcher: '' }, // 会话出现

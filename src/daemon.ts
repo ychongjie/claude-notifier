@@ -53,14 +53,14 @@ export class Daemon {
   /**
    * 点击桌面控件 → 切回该会话:在其所属 tmux session 里选中目标 pane,再把承载该 session 的
    * 那个终端窗口拉到最前。多窗口终端(ghostty 单进程多窗口)靠"按 session 名设标题 + AXRaise"精确聚焦;
-   * 无 Accessibility 权限时 AXRaise 抛错,退化为 activateApp(至少把 app 调前)。terminalBundleId 复用空闲提醒配置。
+   * 无 Accessibility 权限时退化为 activateApp(至少把 app 调前)。终端 app 由 notify.terminalBundleId 指定。
    */
   private async switchToSession(sessionId: string): Promise<{ ok: boolean; error?: string }> {
     const pane = this.activity.get(sessionId)?.pane;
     if (!pane) return { ok: false, error: 'no pane' };
     if (!(await this.tmux.hasPane(pane))) return { ok: false, error: 'pane gone' };
     const sid = sessionId.slice(0, 8);
-    const bundleId = this.cfg.notify.idleSwitch.terminalBundleId;
+    const bundleId = this.cfg.notify.terminalBundleId;
     try {
       await this.tmux.selectPane(pane); // 在目标 session 里选中该 pane
     } catch (err) {
@@ -129,7 +129,7 @@ export class Daemon {
     // 旁路更新展示态（桌面控件数据源）。纯观察，不影响下面的遥控控制流。
     this.activity.observe(h);
 
-    // 用户提交了输入 → 该会话正在工作，取消空闲提醒（下一次自然停会重新计时）。
+    // 用户提交了输入 → 刷新该会话 pane/cwd（展示态已由上面的 activity.observe 处理）。
     if (h.event === 'UserPromptSubmit') {
       this.sessions.onUserActivity(h);
       return;

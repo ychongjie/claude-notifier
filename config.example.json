@@ -47,12 +47,7 @@
   "notify": {
     "onlyWhenLocked": true,
     "localNotification": true,
-    "idleSwitch": {
-      "enabled": true,
-      "afterMs": 1800000,
-      "terminalBundleId": "com.mitchellh.ghostty",
-      "terminalNotifierBin": "terminal-notifier"
-    }
+    "terminalBundleId": "com.mitchellh.ghostty"
   },
   "permission": {
     "enabled": true,
