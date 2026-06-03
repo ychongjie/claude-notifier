@@ -10,10 +10,13 @@ import type { IncomingHook } from './hooks/hookTypes.js';
 import { Poller } from './dingtalk/poller.js';
 import { SessionManager } from './session/sessionManager.js';
 import { ActivityTracker } from './status/activityTracker.js';
+import { readTranscriptUsage } from './options/transcript.js';
 import { activateApp, focusWindowViaDock } from './mac/notify.js';
 
 /** pane 探活周期（ms）：与挂件 2s 刷新同量级，关窗口后约这么久从列表消失。 */
 const REAP_MS = 2000;
+/** token/时长 增量解析周期（ms）。 */
+const USAGE_MS = 4000;
 
 export class Daemon {
   private readonly dws: DwsClient;
@@ -25,6 +28,10 @@ export class Daemon {
   private readonly activity: ActivityTracker;
   /** pane 探活定时器：周期性剔除 pane 已消失的会话。 */
   private reapTimer?: ReturnType<typeof setInterval>;
+  /** token/时长 解析定时器。 */
+  private usageTimer?: ReturnType<typeof setInterval>;
+  /** 每会话 transcript 增量解析状态：已读偏移 + 累计输入/输出 token。 */
+  private readonly usageState = new Map<string, { offset: number; tokensIn: number; tokensOut: number }>();
 
   constructor(
     private readonly cfg: Config,
@@ -103,6 +110,27 @@ export class Daemon {
     }
   }
 
+  /** 增量解析各会话 transcript，更新累计 token 与起始时刻。同步 fs，调用很轻（只读新增字节）。 */
+  private refreshUsage(): void {
+    const sessions = this.activity.snapshot();
+    const alive = new Set(sessions.map((s) => s.sessionId));
+    for (const id of this.usageState.keys()) if (!alive.has(id)) this.usageState.delete(id); // 清理已移除会话
+    for (const s of sessions) {
+      if (!s.transcriptPath) continue;
+      const st = this.usageState.get(s.sessionId) ?? { offset: 0, tokensIn: 0, tokensOut: 0 };
+      const r = readTranscriptUsage(s.transcriptPath, st.offset);
+      if (r.reset) {
+        st.tokensIn = 0; // 文件被重写 → 归零重算
+        st.tokensOut = 0;
+      }
+      st.tokensIn += r.tokensInDelta;
+      st.tokensOut += r.tokensOutDelta;
+      st.offset = r.offset;
+      this.usageState.set(s.sessionId, st);
+      this.activity.setUsage(s.sessionId, st.tokensIn, st.tokensOut, r.firstTs);
+    }
+  }
+
   async start(): Promise<void> {
     this.hookServer.setStatusProvider(() => this.buildStatus());
     this.hookServer.setSwitchHandler((sid) => this.switchToSession(sid));
@@ -113,10 +141,12 @@ export class Daemon {
     await this.hookServer.start();
     this.poller.start();
     this.reapTimer = setInterval(() => void this.syncPaneInfo(), REAP_MS);
+    this.usageTimer = setInterval(() => this.refreshUsage(), USAGE_MS);
     this.log.info('daemon 已启动', { group: this.cfg.dingtalk.openConversationId });
     const shutdown = () => {
       this.log.info('收到退出信号，关闭中…');
       if (this.reapTimer) clearInterval(this.reapTimer);
+      if (this.usageTimer) clearInterval(this.usageTimer);
       this.activity.saveNow(); // 落盘最新列表
       this.poller.stop();
       void this.hookServer.stop().then(() => process.exit(0));

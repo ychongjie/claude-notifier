@@ -1,6 +1,6 @@
 // 解析 Claude Code 的 transcript JSONL：统计 assistant 轮数、取最后一条 assistant 文本。
 // 实测结构：assistant 行 .type=="assistant"，文本在 .message.content[]|select(.type=="text").text。
-import { readFileSync } from 'node:fs';
+import { readFileSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 
 export interface TranscriptInfo {
   /** assistant 轮数（type=="assistant" 的行数），用作防死循环水位。 */
@@ -119,6 +119,75 @@ export function readPendingToolUse(path: string): PendingToolUse | null {
     if (!resolvedIds.has(tu.id)) return { name: tu.name, input: tu.input };
   }
   return null;
+}
+
+export interface TranscriptUsage {
+  /** 新增的输入 token（含缓存：input+cacheCreate+cacheRead）。 */
+  tokensInDelta: number;
+  /** 新增的输出 token（output）。 */
+  tokensOutDelta: number;
+  /** 已完整解析到的新字节偏移（下次从这里继续）。 */
+  offset: number;
+  /** 文件被重写/压缩（size < fromOffset）→ 调用方应把累计 token 归零再加 delta。 */
+  reset: boolean;
+  /** 仅 fromOffset==0 时返回：首条带 timestamp 的行的 ms（会话起始时刻）。 */
+  firstTs?: number;
+}
+
+/**
+ * 增量统计 transcript 的 token 用量 + 会话起始时刻。只读 fromOffset 之后的新字节，
+ * 按完整行解析（半行留到下次），累计 assistant 行的 usage 四项之和。供桌面控件展示"总 token / 总时长"。
+ */
+export function readTranscriptUsage(path: string, fromOffset: number): TranscriptUsage {
+  let fd: number;
+  try {
+    fd = openSync(path, 'r');
+  } catch {
+    return { tokensInDelta: 0, tokensOutDelta: 0, offset: fromOffset, reset: false };
+  }
+  try {
+    const size = fstatSync(fd).size;
+    let start = fromOffset;
+    let reset = false;
+    if (size < fromOffset) {
+      start = 0; // 文件被重写（如 /compact）→ 从头重算
+      reset = true;
+    }
+    if (size <= start) return { tokensInDelta: 0, tokensOutDelta: 0, offset: start, reset };
+    const buf = Buffer.allocUnsafe(size - start);
+    readSync(fd, buf, 0, size - start, start);
+    const text = buf.toString('utf8');
+    const lastNl = text.lastIndexOf('\n');
+    if (lastNl < 0) return { tokensInDelta: 0, tokensOutDelta: 0, offset: start, reset }; // 还没有完整新行
+    const complete = text.slice(0, lastNl);
+    const newOffset = start + Buffer.byteLength(complete, 'utf8') + 1; // +1=换行符
+    let tokensInDelta = 0;
+    let tokensOutDelta = 0;
+    let firstTs: number | undefined;
+    const wantFirst = start === 0;
+    for (const rawLine of complete.split('\n')) {
+      const s = rawLine.trim();
+      if (!s) continue;
+      let line: { type?: string; timestamp?: string; message?: { usage?: Record<string, number> } };
+      try {
+        line = JSON.parse(s);
+      } catch {
+        continue;
+      }
+      if (wantFirst && firstTs === undefined && typeof line.timestamp === 'string') {
+        const t = Date.parse(line.timestamp);
+        if (!Number.isNaN(t)) firstTs = t;
+      }
+      const u = line.message?.usage;
+      if (line.type === 'assistant' && u) {
+        tokensInDelta += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+        tokensOutDelta += u.output_tokens || 0;
+      }
+    }
+    return { tokensInDelta, tokensOutDelta, offset: newOffset, reset, firstTs };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** 把 pending tool_use 渲染成单行人类可读描述,如 `Bash: git push origin main`。 */

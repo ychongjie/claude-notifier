@@ -26,6 +26,14 @@ export interface SessionActivity {
   pane?: string;
   /** 所属 tmux session 名（由 reaper 周期性从 pane 同步）。 */
   tmuxSession?: string;
+  /** transcript 路径（来自 hook），用于增量统计 token / 起始时刻。 */
+  transcriptPath?: string;
+  /** 累计输入 token（含缓存：input+cacheCreate+cacheRead），daemon 增量解析 transcript 得到。 */
+  tokensIn?: number;
+  /** 累计输出 token（output）。 */
+  tokensOut?: number;
+  /** 会话真实起始时刻（transcript 首条带 timestamp 行的 ms），用于"总时长"。 */
+  firstTs?: number;
   /** 首次见到该会话的时刻（ms）。 */
   startedAt: number;
   /** 最近一次事件时刻（ms），用于排序与陈旧清理。 */
@@ -86,6 +94,7 @@ export class ActivityTracker {
       this.map.set(h.sessionId, a);
     }
     if (h.pane) a.pane = h.pane;
+    if (h.transcriptPath) a.transcriptPath = h.transcriptPath;
     // hook cwd 会随 Claude `cd` 漂移；只用它当「无 pane 会话」的兜底,且首次写入后不再覆盖。
     // 有 pane 的会话由 syncPanes 用 tmux pane_current_path（稳定的启动目录）权威覆盖。
     if (h.cwd && !a.cwd) a.cwd = h.cwd;
@@ -191,6 +200,26 @@ export class ActivityTracker {
   /** 按 sessionId 取记录（供"点击切回会话"解析 pane）。 */
   get(sessionId: string): SessionActivity | undefined {
     return this.map.get(sessionId);
+  }
+
+  /** 更新会话的累计 token（输入/输出）与起始时刻（由 daemon 周期性增量解析 transcript 后调用）。 */
+  setUsage(sessionId: string, tokensIn: number, tokensOut: number, firstTs?: number): void {
+    const a = this.map.get(sessionId);
+    if (!a) return;
+    let changed = false;
+    if (a.tokensIn !== tokensIn) {
+      a.tokensIn = tokensIn;
+      changed = true;
+    }
+    if (a.tokensOut !== tokensOut) {
+      a.tokensOut = tokensOut;
+      changed = true;
+    }
+    if (firstTs && !a.firstTs) {
+      a.firstTs = firstTs;
+      changed = true;
+    }
+    if (changed) this.changed();
   }
 
   /** 快照：先剔除陈旧会话，再按最近活动倒序，最新的在最前。 */

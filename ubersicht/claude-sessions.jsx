@@ -65,6 +65,21 @@ const fmtAge = (since) => {
   return `${h}h ${m % 60}m`;
 };
 
+const fmtDur = (since) => {
+  if (!since) return '';
+  const m = Math.max(0, Math.floor((Date.now() - since) / 60000));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h${m % 60 ? ` ${m % 60}m` : ''}`;
+};
+
+const fmtTok = (n) => {
+  if (!n) return '0';
+  if (n < 1000) return String(n);
+  if (n < 1e6) return `${(n / 1e3).toFixed(n < 1e4 ? 1 : 0)}k`;
+  return `${(n / 1e6).toFixed(1)}M`;
+};
+
 const wrap = { background: 'rgba(13,17,23,0.82)', borderRadius: 12, padding: '12px 14px', border: '1px solid rgba(240,246,252,0.08)' };
 const header = { fontSize: 12, fontWeight: 600, letterSpacing: 0.4, color: '#8b949e', textTransform: 'uppercase', marginBottom: 10 };
 const card = { display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 0', borderTop: '1px solid rgba(240,246,252,0.06)' };
@@ -74,6 +89,7 @@ const name = { fontSize: 13.5, fontWeight: 600, color: '#e6edf3', whiteSpace: 'n
 const age = { fontSize: 11, color: '#6e7681', flex: '0 0 auto', fontVariantNumeric: 'tabular-nums' };
 const sub = { fontSize: 11.5, color: '#8b949e', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
 const detail = { fontSize: 11, color: '#7d8590', marginTop: 2, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+const meta_ = { fontSize: 10.5, color: '#6e7681', marginTop: 3, fontVariantNumeric: 'tabular-nums' };
 
 export const render = ({ output }) => {
   let data;
@@ -129,6 +145,9 @@ export const render = ({ output }) => {
                   {s.pane ? ` · ${s.pane}` : ''}
                 </div>
                 {s.toolDetail ? <div style={detail}>{s.toolDetail}</div> : null}
+                <div style={meta_}>
+                  共 {fmtDur(s.firstTs || s.startedAt)} · ↑{fmtTok(s.tokensIn)} ↓{fmtTok(s.tokensOut)}
+                </div>
               </div>
             </div>
           );
