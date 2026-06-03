@@ -62,15 +62,14 @@ export const ConfigSchema = z.object({
       onlyWhenLocked: z.boolean().default(true),
       // 鉴权失效/需要 PAT 授权时弹一条本机 macOS 通知（此时 dws 已发不出钉钉，靠本机提醒你介入）。
       localNotification: z.boolean().default(true),
-      // 任一 tmux 会话"等待用户输入"超过 afterMs 且锁屏时，弹一条可点击的本机通知；
-      // 点击经 terminal-notifier 切到该会话的 pane 并激活终端 app。
+      // 任一 tmux 会话"等待用户输入"超过 afterMs 且【未锁屏】时（你在电脑前但没看这个会话），
+      // 弹一条可点击的本机通知；点击经 terminal-notifier 切到该会话的 pane 并激活终端 app。
+      // 锁屏时不弹（你不在电脑前 → 提醒走钉钉）。
       idleSwitch: z
         .object({
           enabled: z.boolean().default(true),
           // 等待多久后提醒（默认 30 分钟）。
           afterMs: z.number().int().positive().default(1800000),
-          // 到点时若未锁屏：每隔这么久重探一次锁屏状态（之后才锁屏也能兜住），默认 5 分钟。
-          recheckMs: z.number().int().positive().default(300000),
           // 点击通知要激活的终端 app bundle id（默认 ghostty）。
           terminalBundleId: z.string().default('com.mitchellh.ghostty'),
           // terminal-notifier 可执行名/路径；未安装则退化为不可点击的 osascript 通知。

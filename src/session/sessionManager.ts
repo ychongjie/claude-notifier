@@ -10,7 +10,7 @@ import type { TmuxClient } from '../tmux/tmuxClient.js';
 import { pushOptions } from '../dingtalk/push.js';
 import { isScreenLocked } from '../mac/lockState.js';
 import { macNotifyThrottled, macNotifyClickable, buildSwitchCommand } from '../mac/notify.js';
-import { readTranscript } from '../options/transcript.js';
+import { readTranscript, readPendingToolUse, describeToolUse } from '../options/transcript.js';
 import { buildMetaPrompt, makeSentinel } from '../options/metaPrompt.js';
 import { findOptionsBySentinel } from '../options/optionsSchema.js';
 import type { IncomingHook } from '../hooks/hookTypes.js';
@@ -141,8 +141,12 @@ export class SessionManager {
     }
     // 取消任何进行中的选项生成（权限优先），用固定的允许/拒绝选项推送。
     this.clearGen(rec);
+    // 从 transcript 取出正在等待授权的工具调用，展示「具体执行什么命令」。
+    // hook 的 message 多为泛化文案（如 "Claude needs your permission"），不含命令本身。
+    const pending = readPendingToolUse(h.transcriptPath);
+    const head = pending ? describeToolUse(pending) : h.message?.trim() || 'Claude 请求执行一个需要确认的操作';
     const optionSet: OptionSet = {
-      summary: '需要工具授权：' + (h.message?.trim() || 'Claude 请求执行一个需要确认的操作'),
+      summary: '需要工具授权：' + head,
       options: [
         { key: '1', label: '允许', injectText: 'allow', keys: this.cfg.permission.allowKey },
         { key: '2', label: '拒绝', injectText: 'deny', keys: this.cfg.permission.denyKey },
@@ -277,20 +281,16 @@ export class SessionManager {
     rec.idleTimer = undefined;
   }
 
-  /** 定时器到点：仍是 tmux 等待态 + 锁屏 → 弹一条可点击通知（点击切回该会话）。 */
+  /** 定时器到点：仍是 tmux 等待态 + 未锁屏 → 弹一条可点击通知（点击切回该会话）。
+   *  锁屏时你不在电脑前，提醒走钉钉，桌面通知不弹。 */
   private async maybeIdleNotify(rec: SessionRecord): Promise<void> {
     rec.idleTimer = undefined;
     const sid = rec.sessionId.slice(0, 8);
     if (rec.state === 'INJECTING') return; // 正在处理用户输入，不算等待
     if (!rec.pane || !(await this.tmux.hasPane(rec.pane))) return; // pane 没了，切不过去
     const locked = await isScreenLocked();
-    if (locked !== true) {
-      // 未锁屏（或判定不出）：按"只在锁屏时弹"暂不打扰；之后才锁屏的情况靠重探兜住。
-      const since = rec.waitingSince ?? Date.now();
-      if (Date.now() - since > this.cfg.timeouts.staleWaitMs) return; // 等太久了，放弃重探
-      rec.idleTimer = setTimeout(() => void this.maybeIdleNotify(rec), this.cfg.notify.idleSwitch.recheckMs);
-      return;
-    }
+    // 锁屏（或判定不出）：你不在电脑前，此时已走钉钉提醒 → 桌面通知不弹、也不重探。
+    if (locked !== false) return;
     if (rec.idleNotified) return;
     rec.idleNotified = true;
     const ageMin = Math.round((Date.now() - (rec.waitingSince ?? Date.now())) / 60000);
