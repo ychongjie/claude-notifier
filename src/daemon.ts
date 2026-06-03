@@ -7,6 +7,8 @@ import { HookServer } from './hooks/hookServer.js';
 import type { IncomingHook } from './hooks/hookTypes.js';
 import { Poller } from './dingtalk/poller.js';
 import { SessionManager } from './session/sessionManager.js';
+import { ActivityTracker } from './status/activityTracker.js';
+import { activateApp, focusWindowViaDock } from './mac/notify.js';
 
 export class Daemon {
   private readonly dws: DwsClient;
@@ -14,6 +16,8 @@ export class Daemon {
   private readonly hookServer: HookServer;
   private readonly sessions: SessionManager;
   private readonly poller: Poller;
+  /** 展示态（桌面控件数据源），与控制状态机解耦。 */
+  private readonly activity = new ActivityTracker();
 
   constructor(
     private readonly cfg: Config,
@@ -33,8 +37,59 @@ export class Daemon {
     this.hookServer = new HookServer(cfg.hookServer, log, (h) => this.onHook(h));
   }
 
+  /** 桌面控件用的状态快照。 */
+  private buildStatus(): unknown {
+    return { onlyWhenLocked: this.cfg.notify.onlyWhenLocked, sessions: this.activity.snapshot() };
+  }
+
+  /**
+   * 点击桌面控件 → 切回该会话:在其所属 tmux session 里选中目标 pane,再把承载该 session 的
+   * 那个终端窗口拉到最前。多窗口终端(ghostty 单进程多窗口)靠"按 session 名设标题 + AXRaise"精确聚焦;
+   * 无 Accessibility 权限时 AXRaise 抛错,退化为 activateApp(至少把 app 调前)。terminalBundleId 复用空闲提醒配置。
+   */
+  private async switchToSession(sessionId: string): Promise<{ ok: boolean; error?: string }> {
+    const pane = this.activity.get(sessionId)?.pane;
+    if (!pane) return { ok: false, error: 'no pane' };
+    if (!(await this.tmux.hasPane(pane))) return { ok: false, error: 'pane gone' };
+    const sid = sessionId.slice(0, 8);
+    const bundleId = this.cfg.notify.idleSwitch.terminalBundleId;
+    try {
+      await this.tmux.selectPane(pane); // 在目标 session 里选中该 pane
+    } catch (err) {
+      this.log.warn('切回会话失败(select-pane)', { session: sid, pane, err: String(err) });
+      return { ok: false, error: String(err) };
+    }
+    // 通过 Dock 窗口菜单聚焦承载该 session 的终端窗口（可跨全屏 Space,纯公开 AX）。
+    let focused = '';
+    try {
+      const tmuxSession = await this.tmux.sessionOfPane(pane);
+      const ttys = tmuxSession ? await this.tmux.clientTtysOfSession(tmuxSession) : [];
+      if (tmuxSession && ttys.length) {
+        await this.tmux.setSessionTitle(tmuxSession); // 窗口标题 = session 名 → Dock 菜单项即按此名
+        for (const tty of ttys) await this.tmux.refreshClient(tty);
+        focused = await focusWindowViaDock(bundleId, tmuxSession);
+        this.log.debug('Dock 聚焦', { session: sid, tmuxSession, result: focused });
+      }
+    } catch (err) {
+      this.log.warn('Dock 聚焦失败(可能缺 Accessibility 权限)', { session: sid, err: String(err) });
+    }
+    if (focused !== 'ok') {
+      // 退化:Dock 路径没成,至少把 app 调前(同 Space 下也算切过去了)。
+      try {
+        await activateApp(bundleId);
+      } catch {
+        /* 调前台失败不致命 */
+      }
+    }
+    this.log.info('点击切回会话', { session: sid, pane, focused });
+    return { ok: true };
+  }
+
   async start(): Promise<void> {
-    this.hookServer.setStatusProvider(() => this.sessions.getStatus());
+    this.hookServer.setStatusProvider(() => this.buildStatus());
+    this.hookServer.setSwitchHandler((sid) => this.switchToSession(sid));
+    // 展示态变化即向 SSE 客户端推送一帧。
+    this.activity.subscribe(() => this.hookServer.broadcast(this.buildStatus()));
     this.sessions.restoreState(); // 恢复重启前未决的等待
     await this.hookServer.start();
     this.poller.start();
@@ -49,6 +104,9 @@ export class Daemon {
   }
 
   private onHook(h: IncomingHook): void {
+    // 旁路更新展示态（桌面控件数据源）。纯观察，不影响下面的遥控控制流。
+    this.activity.observe(h);
+
     // 用户提交了输入 → 该会话正在工作，取消空闲提醒（下一次自然停会重新计时）。
     if (h.event === 'UserPromptSubmit') {
       this.sessions.onUserActivity(h);

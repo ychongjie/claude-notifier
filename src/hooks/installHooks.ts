@@ -16,6 +16,11 @@ const REGISTRATIONS: Array<{ event: string; matcher: string }> = [
   { event: 'Stop', matcher: '' },
   // 用户提交输入：让 daemon 知道会话"开始工作了"，取消 30 分钟空闲提醒。
   { event: 'UserPromptSubmit', matcher: '' },
+  // 以下仅供桌面控件的"实时运行状态"展示（ActivityTracker 旁路观察，不参与遥控/推送）。
+  { event: 'SessionStart', matcher: '' }, // 会话出现
+  { event: 'SessionEnd', matcher: '' }, // 会话结束 → 从列表移除
+  { event: 'PreToolUse', matcher: '*' }, // 正在执行某工具
+  { event: 'PostToolUse', matcher: '*' }, // 工具跑完
 ];
 
 /** 用这个标记识别「是我们装的」hook 条目，便于幂等替换。 */

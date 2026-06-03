@@ -1,14 +1,18 @@
 // 本地 HTTP server：接收 hook 脚本 POST 来的 Claude payload + tmux pane。
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { Logger } from '../logger.js';
 import type { ClaudeHookPayload, IncomingHook } from './hookTypes.js';
 
 export type HookHandler = (hook: IncomingHook) => void;
 export type StatusProvider = () => unknown;
+export type SwitchHandler = (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
 
 export class HookServer {
   private server?: Server;
   private statusProvider?: StatusProvider;
+  private switchHandler?: SwitchHandler;
+  /** /events 的 SSE 长连接（桌面控件推送）。 */
+  private readonly sse = new Set<ServerResponse>();
 
   constructor(
     private readonly opts: { host: string; port: number },
@@ -20,13 +24,66 @@ export class HookServer {
     this.statusProvider = p;
   }
 
+  /** 注册"点击切回会话"处理器（解析 pane、select-pane、激活终端）。 */
+  setSwitchHandler(fn: SwitchHandler): void {
+    this.switchHandler = fn;
+  }
+
+  /** 向所有 SSE 客户端推一帧状态（供 daemon 在展示态变化时调用）。 */
+  broadcast(payload: unknown): void {
+    if (this.sse.size === 0) return;
+    const line = `data: ${JSON.stringify(payload)}\n\n`;
+    for (const res of this.sse) {
+      try {
+        res.write(line);
+      } catch {
+        this.sse.delete(res);
+      }
+    }
+  }
+
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = createServer((req, res) => {
         if (req.method === 'GET' && req.url?.startsWith('/status')) {
           res.statusCode = 200;
           res.setHeader('content-type', 'application/json');
+          res.setHeader('access-control-allow-origin', '*'); // 允许浏览器/控件跨源拉取
           res.end(JSON.stringify(this.statusProvider?.() ?? { ok: true }, null, 2));
+          return;
+        }
+        if (req.method === 'GET' && req.url?.startsWith('/events')) {
+          // SSE：建立长连接，状态变化时由 broadcast() 推送。
+          res.statusCode = 200;
+          res.setHeader('content-type', 'text/event-stream');
+          res.setHeader('cache-control', 'no-cache');
+          res.setHeader('connection', 'keep-alive');
+          res.setHeader('access-control-allow-origin', '*');
+          res.write(': connected\n\n');
+          res.write(`data: ${JSON.stringify(this.statusProvider?.() ?? {})}\n\n`); // 连上即给初始快照
+          this.sse.add(res);
+          req.on('close', () => this.sse.delete(res));
+          return;
+        }
+        if (req.url?.startsWith('/switch')) {
+          // 桌面控件点击 → 切回该会话的 tmux pane。method 不限（GET/POST 皆可）。
+          res.setHeader('content-type', 'application/json');
+          res.setHeader('access-control-allow-origin', '*');
+          const sid = new URL(req.url, 'http://localhost').searchParams.get('session') ?? '';
+          if (!this.switchHandler || !sid) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ ok: false, error: 'missing session' }));
+            return;
+          }
+          this.switchHandler(sid)
+            .then((r) => {
+              res.statusCode = r.ok ? 200 : 409;
+              res.end(JSON.stringify(r));
+            })
+            .catch((err) => {
+              res.statusCode = 500;
+              res.end(JSON.stringify({ ok: false, error: String(err) }));
+            });
           return;
         }
         if (req.method !== 'POST' || !req.url?.startsWith('/hook')) {
@@ -78,6 +135,8 @@ export class HookServer {
       notificationType: payload.notification_type,
       message: payload.message,
       stopHookActive: payload.stop_hook_active,
+      toolName: payload.tool_name,
+      toolInput: payload.tool_input,
       pane,
     };
     this.log.debug('收到 hook', { event: hook.event, type: hook.notificationType, pane, session: hook.sessionId.slice(0, 8) });
@@ -85,6 +144,14 @@ export class HookServer {
   }
 
   async stop(): Promise<void> {
+    for (const res of this.sse) {
+      try {
+        res.end();
+      } catch {
+        /* 忽略 */
+      }
+    }
+    this.sse.clear();
     if (!this.server) return;
     await new Promise<void>((resolve) => this.server!.close(() => resolve()));
     this.server = undefined;

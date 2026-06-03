@@ -446,19 +446,6 @@ export class SessionManager {
     this.persistState();
   }
 
-  /** 健康/状态快照（供 status 子命令）。 */
-  getStatus(): unknown {
-    return {
-      onlyWhenLocked: this.cfg.notify.onlyWhenLocked,
-      sessions: [...this.sessions.values()].map((s) => ({
-        session: s.sessionId.slice(0, 8),
-        state: s.state,
-        pane: s.pane,
-        waiting: s.state === 'WAITING_USER' ? s.optionSet?.options.map((o) => `${o.key}:${o.label}`) : undefined,
-      })),
-    };
-  }
-
   // ---- 状态持久化：让 daemon 重启后仍能接收对此前推送消息的表情 ----
 
   private persistState(): void {
