@@ -22,8 +22,10 @@ npm run cli -- status             # 看运行中 daemon 的会话状态
 
 ```
 bin/claude-notifier-hook         # POSIX sh:读 stdin payload + $TMUX_PANE(经 X-CN-Pane header),curl POST 给 daemon
-  └─> src/hooks/hookServer.ts    # 本地 HTTP:POST /hook 收事件,GET /status 出状态
-        └─> src/daemon.ts        # 编排:HookServer + Poller + SessionManager
+  └─> src/hooks/hookServer.ts    # 本地 HTTP:POST /hook 收事件,GET /status 出状态,GET /events 出 SSE
+        └─> src/daemon.ts        # 编排:HookServer + Poller + SessionManager + ActivityTracker
+              ├─> src/status/activityTracker.ts   # 展示态(桌面控件数据源):旁路观察 hook 流,与状态机解耦
+              │     └─ ubersicht/claude-sessions.jsx  # Übersicht 桌面挂件(curl /status 渲染会话列表)
               └─> src/session/sessionManager.ts   # 状态机(核心)
                     ├─ src/options/metaPrompt.ts     # 单行 meta-prompt + sentinel
                     ├─ src/options/optionsSchema.ts  # zod 校验 + 按 sentinel 搜 transcript
@@ -60,6 +62,8 @@ src/service/launchd.ts           # LaunchAgent plist 生成与加载
 10. **dws 失败不许硬刚**:poller 按错误分类退避——`network`/`unknown` 指数退避(封顶 `poll.maxBackoffMs`),`auth`/`pat` 暂停轮询、每 `poll.authPauseMs` 才探测一次并弹本机通知,恢复后自动继续。新增任何"循环调 dws"的路径都必须接入这套退避,**绝不能在鉴权失效时仍每 2s 调用**(会触发 dws 拉浏览器 + 烧调用)。
 11. **等待态会老化**:`WAITING_USER` 超 `timeouts.staleWaitMs`(默认 6h)无人点选即作废(`expireStaleWaits`,在 `getContext` 里跑),否则一旦有等待 poller 永久轮询。
 12. **空闲提醒是独立路径**:任一 **tmux** 会话等待用户输入超 `notify.idleSwitch.afterMs`(默认 30min)且**未锁屏**时(你在电脑前但没看这个会话),弹一条**可点击**本机通知(`maybeIdleNotify`);点击经 `terminal-notifier -execute` 跑 `buildSwitchCommand`(tmux select-window/pane + `open -b <bundleId>`)切回会话。**锁屏时不弹**——你不在电脑前,提醒走钉钉(锁屏=钉钉、未锁屏=桌面通知,两条互补)。与钉钉遥控**完全解耦**——不注入 meta-prompt、不推钉钉。要点:(a) 用 `idleTurns` 去重——**同轮数的重复 idle hook 不重置 30min 时钟**(否则 idle_prompt 反复触发会让 30min 永远走不到);(b) `UserPromptSubmit` hook → `onUserActivity` 取消计时(防"Claude 正忙"误报),注入 meta-prompt / 用户点选注入时也 `clearIdleTimer`,下一次自然停重新计时;(c) 只对有 `pane` 的会话武装(没 pane 切不过去);(d) 到点仍锁屏则**直接放弃**(钉钉已提醒,不重探、不补弹);弹过一次即 `idleNotified`,不重弹。`terminal-notifier` 未装时 `macNotifyClickable` 退化为不可点击的 osascript 通知。
+13. **展示态是纯旁路,不得反向影响控制流**:`ActivityTracker`(`src/status/activityTracker.ts`)只在 `daemon.onHook` 顶部被 `observe(h)` 调一下,读 hook、只写自己的 map。它**绝不**触发注入/推送/锁屏门控/轮询,也**不**读写 `SessionManager` 的控制状态机(`IDLE/WAITING_USER…`)——两套状态各自独立。这样它就能安全地吃 `PreToolUse/PostToolUse/SessionStart/SessionEnd` 这些高频/全量事件而不会扰动安全关键逻辑。状态映射:`SessionStart→waiting_input`、`UserPromptSubmit→thinking`、`PreToolUse→running`(带 `currentTool`+`toolDetail`,复用 `describeToolUse`)、`PostToolUse→thinking`、`Stop→waiting_input`、`Notification(permission_prompt)→waiting_permission`、`SessionEnd→`移除。`snapshot()` 还会剔除 `STALE_MS`(12h)无事件的会话,兜底没发 `SessionEnd` 的非正常退出。数据出口:`GET /status`(快照)与 `GET /events`(SSE,展示态变化即推一帧);桌面控件(`ubersicht/claude-sessions.jsx`)2s 拉一次 `/status`。**新增任何展示需求都从这条旁路走,别去动状态机。**
+14. **点击切回会话(`POST /switch?session=`)跨全屏 Space 靠 Dock 菜单**:挂件点卡片 → `daemon.switchToSession`:(a) `tmux select-pane` 在目标 session 里选中 pane;(b) `setSessionTitle` 把该 session 的 ghostty 窗口标题设成 **session 名**(`set-titles on` per session)+ `refresh-client` 推下去;(c) `focusWindowViaDock`(`src/mac/notify.ts`)用**公开 AX 驱动 Dock 图标的窗口菜单**、按标题点中目标窗口——**Dock 菜单能列出跨所有 Space(含原生全屏)的窗口**,这是关键:`windows of process` 只看当前 Space,AXRaise 跨不了全屏 Space,而 Dock 菜单可以。失败(无 Accessibility / 菜单没就绪)才退化为 `activateApp`(`open -b`,只能切到 app 最前窗口)。**不用任何私有 CGS API、不动 SIP**;但需 daemon 有 Accessibility 权限(授给 plist 里的 node 真实路径)。`focusWindowViaDock` 内部**轮询等菜单就绪**(固定 delay 会偶发 `-1719`)。副作用:窗口标题被打成 session 名(顺带当标签用)。
 
 ## 实测得到的环境约束(踩过的坑)
 
