@@ -12,6 +12,7 @@ export type ActivityStatus =
   | 'thinking' // 已收到输入 / 工具刚跑完，Claude 正在生成
   | 'running' // 正在执行某个工具
   | 'waiting_input' // 自然停，等用户输入
+  | 'waiting_background' // 自然停，但有后台 shell 还在跑（等后台结果，不是真的等你）
   | 'waiting_permission'; // 等工具授权
 
 export interface SessionActivity {
@@ -200,6 +201,22 @@ export class ActivityTracker {
   /** 按 sessionId 取记录（供"点击切回会话"解析 pane）。 */
   get(sessionId: string): SessionActivity | undefined {
     return this.map.get(sessionId);
+  }
+
+  /**
+   * 后台任务探测：**仅细化"等待"态**——有后台 shell 在跑时 waiting_input ↔ waiting_background。
+   * 不动 running/thinking/waiting_permission（那些不是"停下等待"）。statusSince 不重置（同一次等待的再分类）。
+   */
+  setBackground(sessionId: string, hasBackground: boolean): void {
+    const a = this.map.get(sessionId);
+    if (!a) return;
+    if (hasBackground && a.status === 'waiting_input') {
+      a.status = 'waiting_background';
+      this.changed();
+    } else if (!hasBackground && a.status === 'waiting_background') {
+      a.status = 'waiting_input';
+      this.changed();
+    }
   }
 
   /** 更新会话的累计 token（输入/输出）与起始时刻（由 daemon 周期性增量解析 transcript 后调用）。 */

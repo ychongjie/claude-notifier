@@ -36,6 +36,7 @@ const STATUS = {
   running: { dot: '#3fb950', label: '运行中' },
   thinking: { dot: '#58a6ff', label: '思考中' },
   waiting_input: { dot: '#d29922', label: '等待输入' },
+  waiting_background: { dot: '#39c5cf', label: '等后台结果' },
   waiting_permission: { dot: '#f85149', label: '等待授权' },
 };
 

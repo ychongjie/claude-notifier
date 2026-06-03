@@ -18,6 +18,11 @@ const REAP_MS = 2000;
 /** token/时长 增量解析周期（ms）。 */
 const USAGE_MS = 4000;
 
+/** 从 pane 可见内容识别 Claude Code 状态行里的「后台 shell 在跑」(如 "1 shell still running" / "1 shell · ↓ to manage")。 */
+function hasBackgroundShell(paneText: string): boolean {
+  return /[1-9]\d* shells?(?: still running| ·)/.test(paneText);
+}
+
 export class Daemon {
   private readonly dws: DwsClient;
   private readonly tmux: TmuxClient;
@@ -100,13 +105,23 @@ export class Daemon {
     return { ok: true };
   }
 
-  /** 周期性同步 tmux pane 信息：剔除已关闭窗口的会话 + 刷新 session 名/启动目录。 */
+  /** 周期性同步 tmux pane 信息：剔除已关闭窗口的会话 + 刷新 session 名/启动目录 + 后台任务探测。 */
   private async syncPaneInfo(): Promise<void> {
     try {
       const info = await this.tmux.listPaneInfo(); // tmux 异常会抛出 → 不误删；只有 server 在跑且确无该 pane 才剔除
       this.activity.syncPanes(info);
     } catch {
-      /* tmux 不可用（如 server 没起）：跳过本轮 */
+      return; // tmux 不可用（如 server 没起）：跳过本轮
+    }
+    // 后台任务探测：对"等待"态会话抓 pane，识别状态行里的「N shell still running」→ waiting_background。
+    for (const s of this.activity.snapshot()) {
+      if (!s.pane || (s.status !== 'waiting_input' && s.status !== 'waiting_background')) continue;
+      try {
+        const text = await this.tmux.capturePane(s.pane);
+        this.activity.setBackground(s.sessionId, hasBackgroundShell(text));
+      } catch {
+        /* 抓不到就维持原状态 */
+      }
     }
   }
 
