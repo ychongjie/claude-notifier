@@ -262,8 +262,19 @@ export class SessionManager {
   ): Promise<void> {
     this.clearGen(rec); // 离开 GENERATING_OPTIONS
     const marker = `CN-${rec.sessionId.slice(0, 8)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
+    // 取 tmux 会话名 + 启动路径(稳定的 pane current_path)标注到钉钉消息,便于区分多个 Claude 会话。
+    const label: { tmuxSession?: string; cwd?: string } = { cwd: rec.cwd };
+    if (rec.pane) {
+      try {
+        const info = await this.tmux.paneInfo(rec.pane);
+        if (info.session) label.tmuxSession = info.session;
+        if (info.path) label.cwd = info.path;
+      } catch {
+        /* 拿不到就用已有 cwd */
+      }
+    }
     try {
-      await pushOptions(this.dws, this.cfg, { sessionId: rec.sessionId, optionSet, marker, kind });
+      await pushOptions(this.dws, this.cfg, { sessionId: rec.sessionId, optionSet, marker, kind, label });
     } catch (err) {
       this.log.error('推送选项失败', { err: String(err) });
       // 推送失败若是鉴权/授权问题，弹本机通知提醒（此时钉钉已发不出，只能靠本机）。

@@ -78,6 +78,13 @@ export class TmuxClient {
     return (await this.run(['display-message', '-p', '-t', pane, '#{session_name}'])).trim();
   }
 
+  /** 该 pane 的 session 名 + current_path（用于钉钉消息标注是哪个会话）。空格分隔、session 取首词、path 取剩余。 */
+  async paneInfo(pane: PaneId): Promise<{ session: string; path: string }> {
+    const out = (await this.run(['display-message', '-p', '-t', pane, '#{session_name} #{pane_current_path}'])).trim();
+    const i = out.indexOf(' ');
+    return i < 0 ? { session: out, path: '' } : { session: out.slice(0, i), path: out.slice(i + 1) };
+  }
+
   /** 某 session 上所有已连接客户端的 tty（每个 = 一个终端窗口）。未连接则空数组。 */
   async clientTtysOfSession(session: string): Promise<string[]> {
     const out = await this.run(['list-clients', '-t', session, '-F', '#{client_tty}']);
