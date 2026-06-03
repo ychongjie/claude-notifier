@@ -43,6 +43,37 @@ export class TmuxClient {
     await this.run(['send-keys', '-t', pane, key]);
   }
 
+  /** 切到该 pane 所在的窗口并选中它（用于"点击切回会话"）。两次独立调用，数组传参不走 shell。 */
+  async selectPane(pane: PaneId): Promise<void> {
+    await this.run(['select-window', '-t', pane]);
+    await this.run(['select-pane', '-t', pane]);
+  }
+
+  /** 该 pane 所属的 tmux session 名。 */
+  async sessionOfPane(pane: PaneId): Promise<string> {
+    return (await this.run(['display-message', '-p', '-t', pane, '#{session_name}'])).trim();
+  }
+
+  /** 某 session 上所有已连接客户端的 tty（每个 = 一个终端窗口）。未连接则空数组。 */
+  async clientTtysOfSession(session: string): Promise<string[]> {
+    const out = await this.run(['list-clients', '-t', session, '-F', '#{client_tty}']);
+    return out
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  /** 让某 session 的终端窗口标题显示其 session 名（供按标题 AXRaise 定位窗口）。仅作用于该 session。 */
+  async setSessionTitle(session: string): Promise<void> {
+    await this.run(['set-option', '-t', session, 'set-titles', 'on']);
+    await this.run(['set-option', '-t', session, 'set-titles-string', '#{session_name}']);
+  }
+
+  /** 立刻把标题等刷给指定客户端（tty）。 */
+  async refreshClient(tty: string): Promise<void> {
+    await this.run(['refresh-client', '-t', tty]);
+  }
+
   /** 抓取 pane 当前可见内容（调试用）。 */
   async capturePane(pane: PaneId): Promise<string> {
     return this.run(['capture-pane', '-p', '-t', pane]);
