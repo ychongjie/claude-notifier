@@ -2,6 +2,7 @@
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { Logger } from '../logger.js';
 import type { ClaudeHookPayload, IncomingHook } from './hookTypes.js';
+import { PANEL_HTML } from '../panel/panelHtml.js';
 
 export type HookHandler = (hook: IncomingHook) => void;
 export type StatusProvider = () => unknown;
@@ -50,6 +51,13 @@ export class HookServer {
           res.setHeader('content-type', 'application/json');
           res.setHeader('access-control-allow-origin', '*'); // 允许浏览器/控件跨源拉取
           res.end(JSON.stringify(this.statusProvider?.() ?? { ok: true }, null, 2));
+          return;
+        }
+        if (req.method === 'GET' && req.url?.startsWith('/panel')) {
+          // 置顶浮层(左缘抽屉的 WKWebView)页面：自包含 HTML，内部连 /events SSE 实时渲染。
+          res.statusCode = 200;
+          res.setHeader('content-type', 'text/html; charset=utf-8');
+          res.end(PANEL_HTML);
           return;
         }
         if (req.method === 'GET' && req.url?.startsWith('/events')) {

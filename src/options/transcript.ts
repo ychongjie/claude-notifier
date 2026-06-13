@@ -132,6 +132,12 @@ export interface TranscriptUsage {
   reset: boolean;
   /** 仅 fromOffset==0 时返回：首条带 timestamp 的行的 ms（会话起始时刻）。 */
   firstTs?: number;
+  /** 本次新字节里出现的最后一个 Claude Code 自动标题（type=="ai-title".aiTitle），无则 undefined。 */
+  aiTitle?: string;
+  /** 本次新字节里出现的最后一条用户 prompt（type=="last-prompt".lastPrompt），无则 undefined。 */
+  lastPrompt?: string;
+  /** 仅 fromOffset==0 时返回：首条真实用户 prompt（滤掉 slash 命令展开 / caveat / meta），无则 undefined。 */
+  firstPrompt?: string;
 }
 
 /**
@@ -164,11 +170,22 @@ export function readTranscriptUsage(path: string, fromOffset: number): Transcrip
     let tokensInDelta = 0;
     let tokensOutDelta = 0;
     let firstTs: number | undefined;
+    let aiTitle: string | undefined;
+    let lastPrompt: string | undefined;
+    let firstPrompt: string | undefined;
     const wantFirst = start === 0;
     for (const rawLine of complete.split('\n')) {
       const s = rawLine.trim();
       if (!s) continue;
-      let line: { type?: string; timestamp?: string; message?: { usage?: Record<string, number> } };
+      let line: {
+        type?: string;
+        timestamp?: string;
+        isMeta?: boolean;
+        isSidechain?: boolean;
+        aiTitle?: string;
+        lastPrompt?: string;
+        message?: { role?: string; usage?: Record<string, number>; content?: ContentBlock[] | string };
+      };
       try {
         line = JSON.parse(s);
       } catch {
@@ -178,13 +195,27 @@ export function readTranscriptUsage(path: string, fromOffset: number): Transcrip
         const t = Date.parse(line.timestamp);
         if (!Number.isNaN(t)) firstTs = t;
       }
+      // Claude Code 周期性追加的会话标题 / 最近 prompt：取本次新字节里最后出现的。
+      if (line.type === 'ai-title' && typeof line.aiTitle === 'string' && line.aiTitle.trim()) {
+        aiTitle = line.aiTitle.trim();
+      }
+      if (line.type === 'last-prompt' && typeof line.lastPrompt === 'string' && line.lastPrompt.trim()) {
+        lastPrompt = line.lastPrompt.trim();
+      }
+      // 首条真实用户 prompt：仅从头解析时取一次。滤掉 slash 命令展开 / caveat / stdout（以 `<` 开头）、meta、子代理。
+      if (wantFirst && firstPrompt === undefined && line.type === 'user' && !line.isMeta && !line.isSidechain) {
+        const text = extractText(line as TranscriptLine);
+        if (text != null && text.trim() && !text.trimStart().startsWith('<')) {
+          firstPrompt = text.trim();
+        }
+      }
       const u = line.message?.usage;
       if (line.type === 'assistant' && u) {
         tokensInDelta += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
         tokensOutDelta += u.output_tokens || 0;
       }
     }
-    return { tokensInDelta, tokensOutDelta, offset: newOffset, reset, firstTs };
+    return { tokensInDelta, tokensOutDelta, offset: newOffset, reset, firstTs, aiTitle, lastPrompt, firstPrompt };
   } finally {
     closeSync(fd);
   }

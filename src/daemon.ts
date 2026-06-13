@@ -148,6 +148,7 @@ export class Daemon {
       st.offset = r.offset;
       this.usageState.set(s.sessionId, st);
       this.activity.setUsage(s.sessionId, st.tokensIn, st.tokensOut, r.firstTs);
+      this.activity.setTopic(s.sessionId, { aiTitle: r.aiTitle, lastPrompt: r.lastPrompt, firstPrompt: r.firstPrompt });
     }
   }
 

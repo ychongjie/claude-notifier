@@ -91,6 +91,11 @@ const age = { fontSize: 11, color: '#6e7681', flex: '0 0 auto', fontVariantNumer
 const sub = { fontSize: 11.5, color: '#8b949e', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
 const detail = { fontSize: 11, color: '#7d8590', marginTop: 2, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
 const meta_ = { fontSize: 10.5, color: '#6e7681', marginTop: 3, fontVariantNumeric: 'tabular-nums' };
+// 工作主题区：ai-title 当主题标签，初始目标 / 当前任务各一行（最多两行截断）。
+const topicTitle = { fontSize: 11.5, color: '#bc8cff', marginTop: 4, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+const clamp2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
+const promptRow = { fontSize: 11, color: '#8b949e', marginTop: 3, lineHeight: 1.35, ...clamp2 };
+const promptLabel = { color: '#6e7681', fontWeight: 600 };
 
 export const render = ({ output }) => {
   let data;
@@ -146,6 +151,19 @@ export const render = ({ output }) => {
                   {s.pane ? ` · ${s.pane}` : ''}
                 </div>
                 {s.toolDetail ? <div style={detail}>{s.toolDetail}</div> : null}
+                {s.aiTitle ? <div style={topicTitle}>◆ {s.aiTitle}</div> : null}
+                {s.firstPrompt ? (
+                  <div style={promptRow}>
+                    <span style={promptLabel}>初始 </span>
+                    {s.firstPrompt}
+                  </div>
+                ) : null}
+                {s.lastPrompt && s.lastPrompt !== s.firstPrompt ? (
+                  <div style={promptRow}>
+                    <span style={promptLabel}>当前 </span>
+                    {s.lastPrompt}
+                  </div>
+                ) : null}
                 <div style={meta_}>
                   共 {fmtDur(s.firstTs || s.startedAt)} · ↑{fmtTok(s.tokensIn)} ↓{fmtTok(s.tokensOut)}
                 </div>

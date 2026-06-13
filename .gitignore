@@ -3,3 +3,4 @@ dist/
 *.log
 config.json
 .DS_Store
+mac-hud/build/

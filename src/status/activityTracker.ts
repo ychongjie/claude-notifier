@@ -35,6 +35,12 @@ export interface SessionActivity {
   tokensOut?: number;
   /** 会话真实起始时刻（transcript 首条带 timestamp 行的 ms），用于"总时长"。 */
   firstTs?: number;
+  /** Claude Code 自动生成的会话标题（kebab-case），整轮工作主题，来自 transcript ai-title 行。 */
+  aiTitle?: string;
+  /** 首条真实用户 prompt（初始目标），来自 transcript 首次从头解析。 */
+  firstPrompt?: string;
+  /** 最近一条用户 prompt（当前任务），来自 transcript last-prompt 行。 */
+  lastPrompt?: string;
   /** 首次见到该会话的时刻（ms）。 */
   startedAt: number;
   /** 最近一次事件时刻（ms），用于排序与陈旧清理。 */
@@ -234,6 +240,30 @@ export class ActivityTracker {
     }
     if (firstTs && !a.firstTs) {
       a.firstTs = firstTs;
+      changed = true;
+    }
+    if (changed) this.changed();
+  }
+
+  /**
+   * 更新会话的工作主题字段（由 daemon 增量解析 transcript 后调用）。
+   * aiTitle/lastPrompt 取最新；firstPrompt 只首次写入（初始目标不随后续 prompt 漂移）。
+   * 传 undefined 表示本次没读到新值，保留原值不动。
+   */
+  setTopic(sessionId: string, topic: { aiTitle?: string; lastPrompt?: string; firstPrompt?: string }): void {
+    const a = this.map.get(sessionId);
+    if (!a) return;
+    let changed = false;
+    if (topic.aiTitle && a.aiTitle !== topic.aiTitle) {
+      a.aiTitle = topic.aiTitle;
+      changed = true;
+    }
+    if (topic.lastPrompt && a.lastPrompt !== topic.lastPrompt) {
+      a.lastPrompt = topic.lastPrompt;
+      changed = true;
+    }
+    if (topic.firstPrompt && !a.firstPrompt) {
+      a.firstPrompt = topic.firstPrompt;
       changed = true;
     }
     if (changed) this.changed();
