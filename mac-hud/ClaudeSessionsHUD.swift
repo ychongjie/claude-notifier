@@ -36,8 +36,8 @@ final class HandleView: NSView {
 
     override func draw(_ dirty: NSRect) {
         let b = bounds
-        // 背景:半透明深色 + 右侧圆角(贴在面板右边、屏幕左缘)。
-        let bg = NSColor(calibratedRed: 0.05, green: 0.07, blue: 0.09, alpha: 0.92)
+        // 背景:实心深色 + 圆角(贴在面板右边、屏幕左缘)。
+        let bg = NSColor(calibratedRed: 0.05, green: 0.07, blue: 0.09, alpha: 1)
         bg.setFill()
         let path = NSBezierPath(roundedRect: b, xRadius: 6, yRadius: 6)
         path.fill()

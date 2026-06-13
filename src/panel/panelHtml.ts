@@ -16,7 +16,7 @@ export const PANEL_HTML = String.raw`<!doctype html>
   body {
     font-family: -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
     color: #e6edf3;
-    background: rgba(13,17,23,0.92);
+    background: #0d1117;
     -webkit-font-smoothing: antialiased;
     overflow-y: auto;
     overflow-x: hidden;
@@ -33,8 +33,13 @@ export const PANEL_HTML = String.raw`<!doctype html>
     display: flex; align-items: flex-start; gap: 9px;
     padding: 10px 0; border-top: 1px solid rgba(240,246,252,0.06);
   }
-  .card.clickable { cursor: pointer; }
-  .card.clickable:hover { background: rgba(240,246,252,0.03); }
+  .switchBtn {
+    flex: 0 0 auto; font-size: 12px; font-weight: 600; color: #fff;
+    background: #2f81f7; border: none; border-radius: 6px; padding: 4px 11px;
+    cursor: pointer; -webkit-app-region: no-drag;
+  }
+  .switchBtn:hover { background: #4493f8; }
+  .switchBtn:active { background: #1f6feb; }
   .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; flex: 0 0 auto; }
   .body { min-width: 0; flex: 1; }
   .titleRow { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
@@ -126,9 +131,7 @@ function render(data) {
     const dir = dirLabel(s, collisions);
     const title = s.tmuxSession || dir || (s.sessionId ? s.sessionId.slice(0, 8) : '—');
     const showDir = dir && s.tmuxSession;
-    const card = el('div', 'card' + (s.pane ? ' clickable' : ''));
-    card.title = s.pane ? '点击切回该会话' : '不在 tmux 里，无法切回';
-    if (s.pane) card.onclick = () => switchTo(s.sessionId);
+    const card = el('div', 'card');
     const dot = el('div', 'dot');
     dot.style.background = meta.dot;
     dot.style.boxShadow = '0 0 6px ' + meta.dot;
@@ -137,6 +140,12 @@ function render(data) {
     const tr = el('div', 'titleRow');
     tr.appendChild(el('div', 'name', title));
     tr.appendChild(el('div', 'age', fmtAge(s.statusSince)));
+    if (s.pane) {
+      const btn = el('button', 'switchBtn', '切回 →');
+      btn.title = '切回该会话的终端';
+      btn.onclick = (e) => { e.stopPropagation(); switchTo(s.sessionId); };
+      tr.appendChild(btn);
+    }
     body.appendChild(tr);
     if (showDir) body.appendChild(el('div', 'sub', dir));
     body.appendChild(el('div', 'sub', meta.label + (s.pane ? ' · ' + s.pane : '')));
