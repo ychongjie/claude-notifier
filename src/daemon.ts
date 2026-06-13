@@ -13,7 +13,7 @@ import { ActivityTracker } from './status/activityTracker.js';
 import { readTranscriptUsage } from './options/transcript.js';
 import { activateApp, focusWindowViaDock } from './mac/notify.js';
 
-/** pane 探活周期（ms）：与挂件 2s 刷新同量级，关窗口后约这么久从列表消失。 */
+/** pane 探活周期（ms）：与 HUD 面板 2s 刷新同量级，关窗口后约这么久从列表消失。 */
 const REAP_MS = 2000;
 /** token/时长 增量解析周期（ms）。 */
 const USAGE_MS = 4000;

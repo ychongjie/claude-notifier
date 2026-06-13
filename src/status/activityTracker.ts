@@ -1,7 +1,7 @@
 // 展示态跟踪器：纯旁路观察 hook 事件流，维护每会话的实时运行状态。
 // 与 SessionManager 的安全控制状态机（IDLE/WAITING_USER…）**完全解耦**——
 // 只读 hook、只写自己的 map，绝不触发注入/推送/锁屏门控/轮询。
-// 给桌面控件（Übersicht / 未来的置顶窗口）当数据源用。
+// 给置顶浮层 HUD（mac-hud/，经 GET /panel + /events SSE）当数据源用。
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Logger } from '../logger.js';

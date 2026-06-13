@@ -2,7 +2,7 @@
 
 竖屏副屏左缘的一个**置顶浮层**:平时只露一个箭头把手,点一下面板从左滑出占满竖屏宽度并钉住,再点收回。浮在所有窗口之上(含最大化 / 原生全屏),平时不占地、不干扰其他 app。
 
-是桌面挂件(`ubersicht/claude-sessions.jsx`)之外的另一个出口,数据同源——daemon 的 `GET /panel`(自包含 HTML,内部连 `/events` SSE 实时刷新)。
+数据源是 daemon 的 `GET /panel`(自包含 HTML,内部连 `/events` SSE 实时刷新),与 daemon 的展示态旁路(`ActivityTracker`)同源。
 
 ## 用法
 

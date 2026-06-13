@@ -1,6 +1,6 @@
 // 置顶浮层(左缘抽屉里的 WKWebView)用的自包含 HTML 页面。
 // 数据走 daemon 的 /events SSE(展示态变化即推),断线退回轮询 /status。
-// 渲染逻辑与 ubersicht/claude-sessions.jsx 对齐(状态点 / 会话名 / 主题三行 / 时长+token),
+// 渲染:状态点 / 会话名 / 主题三行(◆ai-title + 初始/当前 prompt) / 时长+token,
 // 点击卡片 → POST /switch 切回该会话的 tmux pane。
 // daemon 在 GET /panel 直接吐这段字符串,无需打包、无文件路径解析。
 export const PANEL_HTML = String.raw`<!doctype html>

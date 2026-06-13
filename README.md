@@ -79,22 +79,23 @@ npm run cli -- install-service          # 安装并启动 launchd 常驻服务
 
 按键可在 `config.json` 的 `permission.allowKey` / `denyKey` 调整,可用 `permission.enabled:false` 关闭。
 
-### 桌面控件:实时会话面板 + 点击切回
+### 置顶浮层:实时会话面板 + 点击切回
 
-一个 [Übersicht](https://tracesof.net/uebersicht/) 桌面挂件(`ubersicht/claude-sessions.jsx`),在桌面上**实时列出所有 Claude 会话**:tmux session 名 + 启动目录(重名补父级)+ 运行状态(运行中/思考中/等输入/等授权)+ 当前在跑的工具 + 计时。每 2s 拉一次 daemon 的 `GET /status`。**点击某张卡片** → 切回该会话:在其 tmux session 里选中 pane,并把承载它的终端窗口拉到最前(经 Dock 窗口菜单,**可跨原生全屏 Space**,不重开实例)。
+一个置顶浮层 HUD(`mac-hud/`),竖屏副屏左缘的左缘抽屉——平时只露箭头把手,点一下面板从左滑出占满竖屏宽度并钉住、再点收回;**浮在所有窗口之上(含最大化 / 原生全屏)**,平时不占地、不干扰其他 app。面板里**实时列出所有 Claude 会话**:tmux session 名 + 启动目录(重名补父级)+ 运行状态(运行中/思考中/等输入/等后台结果/等授权)+ ◆ 工作主题(Claude Code 自动标题)+ 初始/当前 prompt + 当前在跑的工具 + 时长·token。数据走 daemon 的 `GET /panel`(自包含 HTML,内部连 `/events` SSE 实时刷新)。每张卡片有一个 **「切回 →」按钮** → 切回该会话:在其 tmux session 里选中 pane,并把承载它的终端窗口拉到最前(经 Dock 窗口菜单,**可跨原生全屏 Space**,不重开实例)。
 
-安装:
+安装(需 `swiftc`,Xcode Command Line Tools 即可):
 
 ```bash
-brew install --cask ubersicht
-ln -s "$(pwd)/ubersicht/claude-sessions.jsx" \
-  ~/"Library/Application Support/Übersicht/widgets/claude-sessions.jsx"
-open -a "Übersicht"   # 首启需在「系统设置 → 隐私 → 屏幕录制」授权 Übersicht;右键挂件可指派到某台显示器
+cd mac-hud
+./install.sh      # 编译 → 装成登录自启的 LaunchAgent(com.claude-notifier.hud)
+./uninstall.sh    # 卸载自启并退出
 ```
 
 - **点击切回**需给 daemon 的 node 加「辅助功能(Accessibility)」权限(`launchctl print` 里 plist 用的 node 真实路径);没权限时退化为仅把终端 app 调前。终端 app 由 `notify.terminalBundleId` 指定(默认 ghostty)。
+- 切回全屏窗口若发现全屏 Space 顺序被打乱,是 macOS「自动根据最近使用情况重新排列空间」所致,关掉即可:`defaults write com.apple.dock mru-spaces -bool false && killall Dock`。
 - 会话**出现**:启动即入列(`SessionStart`),daemon 重启也不丢(持久化到 `~/.claude-notifier/activity.json`)。**消失**:正常退出即时移除 / 关窗口·kill 后约 4s 移除(pane 探活)/ 12h 无活动兜底。
-- 与钉钉遥控**完全解耦**——挂件只读状态、点击只切窗口,不注入、不推钉钉。
+- 与钉钉遥控**完全解耦**——浮层只读状态、点击只切窗口,不注入、不推钉钉。
+- 位置/尺寸调参见 `mac-hud/README.md`(把手宽高、面板高、距屏顶等常量)。
 
 > ⚠️ **安全提示**:首次使用前请用一个真实权限弹窗验证"拒绝"确实拒绝了(见下)。不同 Claude Code 版本菜单若有差异,改 `denyKey` 即可。
 
