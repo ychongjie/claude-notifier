@@ -41,6 +41,11 @@ export const ConfigSchema = z.object({
     minCount: z.number().int().min(1).default(2),
     maxCount: z.number().int().min(1).max(5).default(5),
     retryOnInvalid: z.number().int().nonnegative().default(1),
+    // 固定保留最后一个选项为「看更详细的进展和选项」：选中后不推进工作，
+    // 而是用更详尽的 meta-prompt 让 Claude 重新产出一轮更详细的进展+选项再推送。
+    // 开启时 Claude 自生成的选项数被压到 maxCount-1，腾出最后一个 key 给它。
+    reserveDetailOption: z.boolean().default(true),
+    detailOptionLabel: z.string().default('都不合适／看更详细的进展和选项'),
   }),
   timeouts: z.object({
     generationMs: z.number().int().positive().default(60000),

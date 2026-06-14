@@ -28,6 +28,24 @@ const FALLBACK_OPTIONS: OptionSet = {
   ],
 };
 
+/**
+ * 给一组选项追加固定的「看更详细的进展和选项」项（占用最后一个 key）。
+ * 选中它走 regen-detail 动作：不推进工作，重新生成一轮更详尽的进展+选项再推。
+ * 会先剔除 Claude 误用同一 key 的选项，避免冲突。
+ */
+function withDetailOption(optionSet: OptionSet, cfg: Config): OptionSet {
+  if (!cfg.options.reserveDetailOption) return optionSet;
+  const key = String(cfg.options.maxCount); // 保留最后一个槽位（默认 "5"）
+  const base = optionSet.options.filter((o) => o.key !== key);
+  return {
+    summary: optionSet.summary,
+    options: [
+      ...base,
+      { key, label: cfg.options.detailOptionLabel, injectText: '（重新生成更详细的进展与选项）', action: 'regen-detail' },
+    ],
+  };
+}
+
 export class SessionManager {
   private readonly sessions = new Map<string, SessionRecord>();
   /** pushedMessageId → sessionId，便于把表情事件路由到对应会话。 */
@@ -154,8 +172,14 @@ export class SessionManager {
     await this.pushAndWait(rec, optionSet, info.assistantTurns, 'permission');
   }
 
-  /** 注入 meta-prompt，让 Claude 自吐结构化选项。 */
-  private async startOptionGeneration(rec: SessionRecord, turns: number): Promise<void> {
+  /** 生成时让 Claude 自吐的选项上限：保留固定项时压到 maxCount-1，腾出最后一个槽位。 */
+  private genMaxOptions(): number {
+    const { minCount, maxCount, reserveDetailOption } = this.cfg.options;
+    return reserveDetailOption ? Math.max(minCount, maxCount - 1) : maxCount;
+  }
+
+  /** 注入 meta-prompt，让 Claude 自吐结构化选项。detailed=true 时要求更详尽的进展+选项。 */
+  private async startOptionGeneration(rec: SessionRecord, turns: number, detailed = false): Promise<void> {
     const sid = rec.sessionId.slice(0, 8);
     // 无可用 tmux pane（claude 不在 tmux 里，或 pane 已关）→ 无法遥控该会话，直接跳过、不推送。
     if (!rec.pane || !(await this.tmux.hasPane(rec.pane))) {
@@ -179,11 +203,12 @@ export class SessionManager {
     rec.state = 'GENERATING_OPTIONS';
     rec.genTurns = turns;
     rec.sentinel = sentinel;
+    rec.genDetailed = detailed;
     rec.retriesLeft = this.cfg.options.retryOnInvalid;
     this.scheduleGenTimeout(rec);
     try {
-      await this.tmux.injectLine(rec.pane, buildMetaPrompt(sentinel, this.cfg.options.maxCount), this.cfg.tmux.sendKeysEnterDelayMs);
-      this.log.info('已注入 meta-prompt，等待选项产出', { session: sid, sentinel });
+      await this.tmux.injectLine(rec.pane, buildMetaPrompt(sentinel, this.genMaxOptions(), detailed), this.cfg.tmux.sendKeysEnterDelayMs);
+      this.log.info('已注入 meta-prompt，等待选项产出', { session: sid, sentinel, detailed });
     } catch (err) {
       this.log.error('注入 meta-prompt 失败，退化为固定选项', { err: String(err) });
       this.clearGen(rec);
@@ -217,7 +242,7 @@ export class SessionManager {
       this.scheduleGenTimeout(rec);
       this.log.warn('未找到合法选项,重试一次', { session: sid });
       try {
-        await this.tmux.injectLine(rec.pane, buildMetaPrompt(sentinel, this.cfg.options.maxCount), this.cfg.tmux.sendKeysEnterDelayMs);
+        await this.tmux.injectLine(rec.pane, buildMetaPrompt(sentinel, this.genMaxOptions(), rec.genDetailed ?? false), this.cfg.tmux.sendKeysEnterDelayMs);
         return;
       } catch (err) {
         this.log.error('重试注入失败', { err: String(err) });
@@ -239,6 +264,7 @@ export class SessionManager {
     this.clearGenTimer(rec);
     rec.sentinel = undefined;
     rec.genTurns = undefined;
+    rec.genDetailed = undefined;
     rec.retriesLeft = undefined;
   }
   private async onGenTimeout(rec: SessionRecord): Promise<void> {
@@ -261,6 +287,8 @@ export class SessionManager {
     kind: 'options' | 'permission' = 'options',
   ): Promise<void> {
     this.clearGen(rec); // 离开 GENERATING_OPTIONS
+    // 普通选项追加固定的「看更详细的进展和选项」项；权限菜单（允许/拒绝）不追加。
+    if (kind === 'options') optionSet = withDetailOption(optionSet, this.cfg);
     const marker = `CN-${rec.sessionId.slice(0, 8)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
     // 取 tmux 会话名 + 启动路径(稳定的 pane current_path)标注到钉钉消息,便于区分多个 Claude 会话。
     const label: { tmuxSession?: string; cwd?: string } = { cwd: rec.cwd };
@@ -322,12 +350,54 @@ export class SessionManager {
     return undefined;
   }
 
-  /** 处理 poller 来的入站事件（仅表情，挂在具体推送消息上，天然归属到对应会话）。 */
+  /** 处理 poller 来的入站事件：表情挂在推送消息上、文字回复靠引用原消息 id 归属，均天然定位到对应会话。 */
   onInboundEvents(events: InboundEvent[]): void {
     for (const ev of events) {
-      const sessionId = this.pushedToSession.get(ev.messageId);
-      if (!sessionId) continue; // 表情不在任何活跃推送消息上
-      void this.resolve(sessionId, ev.emoji, `表情:${ev.emoji}`);
+      if (ev.kind === 'emoji') {
+        const sessionId = this.pushedToSession.get(ev.messageId);
+        if (!sessionId) continue; // 表情不在任何活跃推送消息上
+        void this.resolve(sessionId, ev.emoji, `表情:${ev.emoji}`);
+      } else {
+        const sessionId = this.pushedToSession.get(ev.quotedMessageId);
+        if (!sessionId) continue; // 引用的不是活跃推送消息
+        void this.resolveText(sessionId, ev.text);
+      }
+    }
+  }
+
+  /** 处理「引用推送消息回复的文字」：纯数字/编号当作选编号，否则把文字作为自由指令注入。 */
+  private async resolveText(sessionId: string, rawText: string): Promise<void> {
+    const rec = this.sessions.get(sessionId);
+    if (!rec || rec.state !== 'WAITING_USER' || !rec.optionSet) return;
+    const sid = sessionId.slice(0, 8);
+    // 单行化（tmux 注入换行会被当回车提前提交）。
+    const text = rawText.replace(/\s*\n\s*/g, ' ').trim();
+    if (!text) return;
+    // 文字正好等于某个选项 key → 当作选择该选项（兼容回复数字 / 权限的 1允许 2拒绝）。
+    if (rec.optionSet.options.some((o) => o.key === text)) {
+      await this.resolve(sessionId, text, `文字编号:${text}`);
+      return;
+    }
+    // 权限菜单（含 keys 的选项）不接受自由文本：避免把文字打进确认弹窗造成误操作。
+    if (rec.optionSet.options.some((o) => o.keys)) {
+      this.log.info('权限等待收到自由文本，忽略（请回复 1 允许 / 2 拒绝）', { session: sid, text: text.slice(0, 60) });
+      return;
+    }
+    if (!rec.pane || !(await this.tmux.hasPane(rec.pane))) {
+      this.log.error('无可用 pane，无法注入自由文本', { session: sid, pane: rec.pane });
+      this.clearWait(rec);
+      return;
+    }
+    // 先切 INJECTING 并清理等待态，避免同一回复被重复处理。
+    rec.state = 'INJECTING';
+    rec.genTimes = []; // 用户成功介入 → 重置熔断计数
+    this.clearWait(rec);
+    try {
+      await this.tmux.injectLine(rec.pane, text, this.cfg.tmux.sendKeysEnterDelayMs);
+      this.log.info('已注入自由文本回复', { session: sid, pane: rec.pane, text: text.slice(0, 80) });
+    } catch (err) {
+      this.log.error('注入自由文本失败', { err: String(err) });
+      rec.state = 'IDLE';
     }
   }
 
@@ -347,6 +417,16 @@ export class SessionManager {
     if (!(await this.tmux.hasPane(rec.pane))) {
       this.log.error('pane 已不存在，无法注入', { session: sessionId.slice(0, 8), pane: rec.pane });
       this.clearWait(rec);
+      return;
+    }
+    // 「看更详细的进展和选项」：不推进工作，重新生成一轮更详尽的进展+选项再推。
+    // 不重置熔断计数（rec.genTimes），保留对反复请求的限制。
+    if (option.action === 'regen-detail') {
+      const baseTurns = rec.pushedAtTurns ?? 0;
+      this.clearWait(rec);
+      rec.state = 'IDLE';
+      this.log.info('用户要求更详细的进展+选项，重新生成', { session: sessionId.slice(0, 8), desc });
+      await this.startOptionGeneration(rec, baseTurns, true);
       return;
     }
     // 先切到 INJECTING 并清理等待态，避免后续同消息的事件重复触发。

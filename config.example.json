@@ -29,7 +29,9 @@
   "options": {
     "minCount": 2,
     "maxCount": 5,
-    "retryOnInvalid": 1
+    "retryOnInvalid": 1,
+    "reserveDetailOption": true,
+    "detailOptionLabel": "都不合适／看更详细的进展和选项"
   },
   "timeouts": {
     "generationMs": 60000,

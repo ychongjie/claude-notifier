@@ -42,11 +42,20 @@ export async function pushStatus(
 
 /** 把选项渲染成消息正文，并在末尾附一个可检索的标记（用于在 list 里定位本条推送）。 */
 export function buildOptionsText(optionSet: OptionSet, marker: string, label?: SessionLabel): string {
-  const lines = optionSet.options.map((o) => `${o.key}) ${o.label}`).join('\n');
+  // 每个选项：编号+标签；普通选项再附一行「→ 选中后会发的指令」让你看清具体动作（权限/特殊动作选项除外）。
+  const lines = optionSet.options
+    .map((o) => {
+      const head = `${o.key}) ${o.label}`;
+      const showInject = !o.keys && !o.action && o.injectText && o.injectText.trim() !== o.label.trim();
+      return showInject ? `${head}\n   → ${truncate(o.injectText, 120)}` : head;
+    })
+    .join('\n');
   // 会话标注行：tmux 会话名 + 启动路径，区分不同 Claude Code 会话。
   const labelParts = [label?.tmuxSession, label?.cwd ? abbrevHome(label.cwd) : undefined].filter(Boolean);
   const labelLine = labelParts.length ? `📂 ${labelParts.join('  ·  ')}\n\n` : '';
-  return `**${truncate(optionSet.summary, 200)}**\n\n${labelLine}点对应表情或回复编号：\n${lines}\n\n〔${marker}〕`;
+  // 操作提示：点表情/回复编号挑选项；或「引用本条消息」回复任意文字直接给指令。
+  const howTo = '点对应表情或回复编号；都不合适可「引用本条消息」回复一段文字直接发指令：';
+  return `**${truncate(optionSet.summary, 400)}**\n\n${labelLine}${howTo}\n${lines}\n\n〔${marker}〕`;
 }
 
 /** 推送状态摘要 + 编号选项。text 内含 marker，便于轮询时定位该消息。 */

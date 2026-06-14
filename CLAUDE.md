@@ -46,13 +46,15 @@ src/service/launchd.ts           # LaunchAgent plist 生成与加载
 
 - **IDLE + Stop/idle hook(锁屏)** → 注入 meta-prompt,进 GENERATING_OPTIONS,记 `genTurns`/`sentinel`/超时。
 - **GENERATING_OPTIONS + Stop** → `handleGenerationResult`:重读 transcript(容忍刷盘延迟,~2s)按 sentinel 找合法 JSON → 推送进 WAITING_USER;失败重试一次→固定选项兜底。
-- **WAITING_USER + 表情事件** → `resolve`:映射 emoji→选项→`tmux send-keys` 注入,进 INJECTING。
+- **WAITING_USER + 表情/编号** → `resolve`:映射 emoji/数字→选项→`tmux send-keys` 注入,进 INJECTING。
+- **WAITING_USER + 引用文字回复** → `resolveText`:自由文本单行化后注入,进 INJECTING(纯数字会先回退到 `resolve` 当编号)。
+- **WAITING_USER + 「看更详细」项**(`option.action==='regen-detail'`,固定占末位 key,见 `withDetailOption`+`options.reserveDetailOption`)→ **不推进工作**:清等待、回 IDLE、再 `startOptionGeneration(detailed=true)` 用「更详细」变体 meta-prompt 重新产出一轮更详尽的进展+选项。**不重置熔断计数**(仍受 `safety` 限制,防反复请求烧 token)。开启保留项时 Claude 自生成选项数被压到 `maxCount-1`(`genMaxOptions`)。
 - **INJECTING + 下一次 Stop** → 回 IDLE(那是新的自然停),进入下一轮。
 
 ## 必须遵守的不变量(改动时别破坏)
 
 1. **meta-prompt 必须单行**:`tmux send-keys` 里的换行 = 回车 = 提前提交。`injectText` 也要去换行(`optionsSchema` 已做)。
-2. **只认表情 reaction**,不处理文本回复(挂在具体消息上 → 天然归属会话,无多会话歧义)。表情名 = 选项 key。
+2. **入站只认两种、都要能精确归属到会话**:(a) **表情 reaction**——挂在具体推送消息上,表情名 = 选项 key;(b) **「引用」推送消息的文字回复**——钉钉引用回复会带 `quotedMessage`(含被引用原消息的 `openMessageId`),据此归属(解决多会话歧义),按回复消息自身 id 去重(`InboundTracker.textSeen`,避免每轮轮询重复注入)。**普通(无引用)文本一律不处理**(否则多会话归属不了)。文字回复:纯数字/恰好等于某选项 key → 当作选编号走 `resolve`;否则 `resolveText` 把文字单行化后作自由指令注入。**权限菜单(选项含 `keys`)不接受自由文本**(避免把文字打进确认弹窗误操作),只认编号。
 3. **锁屏门控**:`notify.onlyWhenLocked` 时未锁不推。新增推送路径都要走这个门控。
 4. **sentinel 关联**:每轮 meta-prompt 用唯一 sentinel;靠它在 transcript 多条 assistant 文本里定位本轮产出(防错配、防刷盘竞态)。
 5. **选项生成只在 Stop(+idle_prompt 兜底)**;`permission_prompt` 走**独立路径**(`onPermissionPrompt`):不注入 meta-prompt,直接推固定「允许/拒绝」,点选后用 `option.keys` 发送 tmux 按键名(允许=`permission.allowKey` 默认 Enter,拒绝=`permission.denyKey` 默认 Escape)。**这是安全关键**:denyKey 必须真的拒绝,改动前务必在真实权限弹窗上验证。

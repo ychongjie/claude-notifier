@@ -7,7 +7,7 @@ export type SessionState =
   | 'WAITING_USER' // 已推送选项，轮询用户选择
   | 'INJECTING'; // 已注入，等 Claude 跑下一轮（其完成即下一次自然停）
 
-/** 用户在钉钉上点的表情 reaction（emoji 名即选项 key）。唯一支持的输入方式。 */
+/** 用户在钉钉上点的表情 reaction（emoji 名即选项 key）。 */
 export interface EmojiEvent {
   kind: 'emoji';
   emoji: string;
@@ -15,7 +15,18 @@ export interface EmojiEvent {
   messageId: string;
 }
 
-export type InboundEvent = EmojiEvent;
+/** 用户「引用某条推送消息」回复的文字（自由指令；纯数字时也可当作选编号）。 */
+export interface TextReplyEvent {
+  kind: 'text';
+  /** 用户回复的文字内容。 */
+  text: string;
+  /** 该回复消息自身的 openMessageId（用于去重，避免每轮轮询重复注入）。 */
+  messageId: string;
+  /** 被引用的原推送消息 openMessageId（用于归属到对应会话，解决多会话歧义）。 */
+  quotedMessageId: string;
+}
+
+export type InboundEvent = EmojiEvent | TextReplyEvent;
 
 /** 单个 session 的运行态。 */
 export interface SessionRecord {
@@ -35,6 +46,8 @@ export interface SessionRecord {
   genTurns?: number;
   /** 本轮 meta-prompt 的 sentinel，校验 Claude 输出是否对应本轮。 */
   sentinel?: string;
+  /** 本轮是否为「更详细」生成（用户点了 regen-detail 选项触发）；用于重试时复用同一变体。 */
+  genDetailed?: boolean;
   /** 剩余重试次数（JSON 非法时）。 */
   retriesLeft?: number;
   /** 生成超时定时器。 */

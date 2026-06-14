@@ -12,6 +12,16 @@ export interface DwsMessage {
   senderOpenDingTalkId: string;
   /** 文字表情/reaction，累积列表，无单条时间戳。 */
   emotionReplyList?: EmotionReply[];
+  /** 该消息「引用回复」的原消息（用户引用某条推送消息回复文字时出现）。openMessageId 即被引用的原消息 id。 */
+  quotedMessage?: QuotedMessage;
+}
+
+/** 引用回复里被引用的原消息（字段为实测自 dws，部分可能缺省）。 */
+export interface QuotedMessage {
+  content: string;
+  openMessageId: string;
+  createTime?: string;
+  sender?: string;
 }
 
 export interface EmotionReply {

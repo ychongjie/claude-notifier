@@ -2,7 +2,9 @@
 
 用**手机钉钉**远程轻量驱动本地 Mac 上的 **Claude Code** 会话。
 
-当你锁屏离开,本地 Claude Code 干完一轮停下来等你下一步时,它会让 Claude 自己总结现状、给出 2~5 个建议选项,推送到你手机钉钉;你**点一下对应表情**,选项就被注入回那个正在运行的会话,驱动 Claude 继续。
+当你锁屏离开,本地 Claude Code 干完一轮停下来等你下一步时,它会让 Claude 自己总结现状、给出几个建议选项,推送到你手机钉钉;你**点一下对应表情**(或**引用那条消息回复一段文字**直接发指令),选项/文字就被注入回那个正在运行的会话,驱动 Claude 继续。
+
+每轮选项还会固定附一项「都不合适／看更详细的进展和选项」——选它不推进工作,而是让 Claude 重新产出一版**更详尽的进展+选项**再推给你。
 
 ```
 Claude 停下(锁屏)  ──Stop hook──▶  daemon  ──注入 meta-prompt──▶  Claude 生成 JSON 选项
@@ -16,7 +18,7 @@ Claude 停下(锁屏)  ──Stop hook──▶  daemon  ──注入 meta-promp
 
 - **触发**:Claude Code 的 `Stop` hook(会话结束一轮、等你输入时触发;锁屏时 60s 的 `idle_prompt` 作兜底)。只有"真正停下等人"才触发——auto 模式不会自启新一轮,不会误触发;`permission_prompt`(轮次中途的工具授权)不处理。
 - **选项生成**:daemon 往同一会话注入一句固定 meta-prompt,让 Claude 输出带唯一 `sentinel` 的 JSON 选项;daemon 按 sentinel 在 transcript 里找到并校验。失败重试一次,再不行退化为固定"继续/停止"。
-- **出站/入站**:经 [dingtalk-workspace-cli (`dws`)](https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli) 发消息 / 轮询读消息。**只认挂在推送消息上的表情 reaction**(表情名 = 选项 key),不处理文本回复。
+- **出站/入站**:经 [dingtalk-workspace-cli (`dws`)](https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli) 发消息 / 轮询读消息。入站认两种:**挂在推送消息上的表情 reaction**(表情名 = 选项 key),以及**「引用」推送消息的文字回复**(靠引用里的原消息 id 精确归属到对应会话;纯数字当作选编号,否则把文字作为自由指令注入)。普通(无引用)文本不处理。
 - **注入**:`tmux send-keys` 打进 Claude 所在 pane。会话↔pane 由 hook 自动捕获 `$TMUX_PANE` 映射,**无需手动命名**。
 - **常驻**:作为 launchd 服务运行,开机自启 + 崩溃自动重启。
 
@@ -52,7 +54,8 @@ npm run cli -- install-service          # 安装并启动 launchd 常驻服务
 | `poll.maxBackoffMs` / `authPauseMs` | 轮询失败退避上限 / 鉴权失效时暂停探测间隔(默认 1min / 10min) |
 | `timeouts.staleWaitMs` | 等待无人响应多久后自动作废(默认 6h),避免永久轮询 |
 | `emojis.candidates` | 候选表情名(默认 `["1".."5"]`),即选项 key |
-| `options.maxCount` / `retryOnInvalid` | 最多选项数(≤5) / JSON 非法重试次数 |
+| `options.maxCount` / `retryOnInvalid` | 最多选项数(≤5,含固定的「更详细」项) / JSON 非法重试次数 |
+| `options.reserveDetailOption` / `detailOptionLabel` | 是否保留固定的「看更详细的进展和选项」末位项(默认 true)/ 其展示文案。开启时 Claude 自生成的选项被压到 `maxCount-1` |
 | `timeouts.generationMs` | 等 Claude 产出选项的超时(超时用固定选项) |
 | `safety.maxGenerationsPerWindow` / `windowMs` | 熔断:单会话单位时间最多生成次数,超出降级固定选项(防 token 失控) |
 | `poll.intervalMs` | 轮询表情的间隔(仅在有会话等待时轮询) |
@@ -66,8 +69,11 @@ npm run cli -- install-service          # 安装并启动 launchd 常驻服务
    claude
    ```
 2. 正常用 Claude。离开时**锁屏**(`Ctrl+Cmd+Q`)。
-3. Claude 干完停下 → 手机钉钉收到 `[CN] 请选择 #...` + 选项。
-4. 在那条消息上**点对应数字表情**(或点你定义的表情)→ Claude 继续。
+3. Claude 干完停下 → 手机钉钉收到 `[CN] 请选择 #...` + 选项(每项附一行「→ 选中后会发的指令」,末位固定一项「看更详细的进展和选项」)。
+4. 三选一让 Claude 继续:
+   - 在那条消息上**点对应数字表情**(或点你定义的表情);
+   - **引用那条消息回复一段文字**(都不合适时),文字会作为自由指令注入;
+   - 点末位「看更详细的进展和选项」(表情 `5`),让 Claude 重新给一版更详尽的进展+选项。
 
 > 不在 tmux 里运行的 Claude 会话**不会**推送(无法遥控,避免无意义打扰)。
 

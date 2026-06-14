@@ -4,13 +4,13 @@ import type { OptionSet } from '../types.js';
 
 const OptionSchema = z.object({
   key: z.string().regex(/^[1-5]$/),
-  label: z.string().min(1).max(80),
+  label: z.string().min(1).max(160),
   injectText: z.string().min(1),
 });
 
 const OptionSetJsonSchema = z.object({
   sentinel: z.string(),
-  summary: z.string().max(300),
+  summary: z.string().max(600),
   options: z.array(OptionSchema).min(2).max(5),
 });
 
