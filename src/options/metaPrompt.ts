@@ -12,7 +12,7 @@ export function buildMetaPrompt(sentinel: string, maxOptions: number, detailed =
   // summary 写清楚：现在在做什么 / 卡在哪或在等什么 / 为什么需要我决定（让我在手机上一眼看懂你要干嘛）。
   const summaryHint = detailed
     ? '把现状讲详细些（不超过400字）：你刚做了什么、当前卡点或在等什么、为什么需要我拍板、各选项分别会导致什么'
-    : '不超过200字，讲清现状、卡在哪或在等什么、为什么需要我决定（让我一眼看懂你要做什么）';
+    : '不超过120字，简明讲清现状和卡在哪/在等什么（让我一眼看懂你要做什么，别展开细节）';
   // label：每个选项写成一句能看懂"选了会发生什么"的短句；injectText：选中后替我发给你的指令。
   const labelHint = detailed ? '一句话说清这个选项会让你做什么（可稍长）' : '能看懂选了会发生什么的短句';
   return (

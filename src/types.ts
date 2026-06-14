@@ -26,7 +26,13 @@ export interface Option {
 
 /** 一轮要推送的选项集合（meta-prompt 产物，或固定兜底）。 */
 export interface OptionSet {
-  /** 状态摘要，<=200 字。 */
+  /** 状态摘要。 */
   summary: string;
   options: Option[];
+  /**
+   * 是否为「更详细」版(用户点了 regen-detail 选项后重生成的那一轮)。
+   * 渲染据此分流：首次推送(false)精简——只列编号+标签、短摘要、一行提示；
+   * 详细版(true)展开——每个选项附「→ 指令」行、长摘要、完整提示。
+   */
+  detailed?: boolean;
 }

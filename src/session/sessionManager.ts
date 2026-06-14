@@ -35,7 +35,11 @@ const FALLBACK_OPTIONS: OptionSet = {
  */
 function withDetailOption(optionSet: OptionSet, cfg: Config): OptionSet {
   if (!cfg.options.reserveDetailOption) return optionSet;
-  const key = String(cfg.options.maxCount); // 保留最后一个槽位（默认 "5"）
+  // 详细项紧接最后一个真实选项的下一序号，避免「1,2,3,5」这种跳号（用户会去点不存在的 4）。
+  // 上限为 maxCount（表情候选 1..maxCount 的范围）。
+  const nums = optionSet.options.map((o) => parseInt(o.key, 10)).filter((n) => Number.isFinite(n));
+  const nextNum = Math.min((nums.length ? Math.max(...nums) : 0) + 1, cfg.options.maxCount);
+  const key = String(nextNum);
   const base = optionSet.options.filter((o) => o.key !== key);
   return {
     summary: optionSet.summary,
@@ -230,10 +234,11 @@ export class SessionManager {
       if (parsed) break;
       await delay(400);
     }
+    const detailed = rec.genDetailed === true; // 本轮是否「看更详细」重生成（pushAndWait 内会清掉该标记，先捕获）
     this.clearGenTimer(rec);
     if (parsed) {
-      this.log.info('选项已生成', { session: sid, options: parsed.options.map((o) => o.key).join(',') });
-      await this.pushAndWait(rec, parsed, turns);
+      this.log.info('选项已生成', { session: sid, options: parsed.options.map((o) => o.key).join(','), detailed });
+      await this.pushAndWait(rec, parsed, turns, 'options', detailed);
       return;
     }
     if ((rec.retriesLeft ?? 0) > 0 && rec.pane) {
@@ -285,10 +290,13 @@ export class SessionManager {
     optionSet: OptionSet,
     turns: number,
     kind: 'options' | 'permission' = 'options',
+    detailed = false,
   ): Promise<void> {
-    this.clearGen(rec); // 离开 GENERATING_OPTIONS
+    this.clearGen(rec); // 离开 GENERATING_OPTIONS（会清掉 rec.genDetailed，故 detailed 须由调用方传入）
     // 普通选项追加固定的「看更详细的进展和选项」项；权限菜单（允许/拒绝）不追加。
     if (kind === 'options') optionSet = withDetailOption(optionSet, this.cfg);
+    // 始终生成全新对象（勿改 FALLBACK_OPTIONS 等共享常量），并标记是否详细版供渲染分流。
+    optionSet = { summary: optionSet.summary, options: optionSet.options, detailed };
     const marker = `CN-${rec.sessionId.slice(0, 8)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
     // 取 tmux 会话名 + 启动路径(稳定的 pane current_path)标注到钉钉消息,便于区分多个 Claude 会话。
     const label: { tmuxSession?: string; cwd?: string } = { cwd: rec.cwd };

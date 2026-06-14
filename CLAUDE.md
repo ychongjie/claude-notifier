@@ -48,7 +48,8 @@ src/service/launchd.ts           # LaunchAgent plist 生成与加载
 - **GENERATING_OPTIONS + Stop** → `handleGenerationResult`:重读 transcript(容忍刷盘延迟,~2s)按 sentinel 找合法 JSON → 推送进 WAITING_USER;失败重试一次→固定选项兜底。
 - **WAITING_USER + 表情/编号** → `resolve`:映射 emoji/数字→选项→`tmux send-keys` 注入,进 INJECTING。
 - **WAITING_USER + 引用文字回复** → `resolveText`:自由文本单行化后注入,进 INJECTING(纯数字会先回退到 `resolve` 当编号)。
-- **WAITING_USER + 「看更详细」项**(`option.action==='regen-detail'`,固定占末位 key,见 `withDetailOption`+`options.reserveDetailOption`)→ **不推进工作**:清等待、回 IDLE、再 `startOptionGeneration(detailed=true)` 用「更详细」变体 meta-prompt 重新产出一轮更详尽的进展+选项。**不重置熔断计数**(仍受 `safety` 限制,防反复请求烧 token)。开启保留项时 Claude 自生成选项数被压到 `maxCount-1`(`genMaxOptions`)。
+- **WAITING_USER + 「看更详细」项**(`option.action==='regen-detail'`,key=最后一个真实选项的**下一序号**、不跳号、上限 `maxCount`,见 `withDetailOption`+`options.reserveDetailOption`)→ **不推进工作**:清等待、回 IDLE、再 `startOptionGeneration(detailed=true)` 用「更详细」变体 meta-prompt 重新产出一轮更详尽的进展+选项。**不重置熔断计数**(仍受 `safety` 限制,防反复请求烧 token)。开启保留项时 Claude 自生成选项数被压到 `maxCount-1`(`genMaxOptions`)。
+- **首次推送 vs 详细版渲染分流**:`OptionSet.detailed` 标记决定 `buildOptionsText` 形态——**首次(false)精简**:只列「编号) 标签」、摘要上限 220、一行操作提示;**详细版(true,点 5 后那轮)展开**:每个普通选项附「→ injectText」行、摘要上限 400、完整操作提示。`detailed` 由 `handleGenerationResult` 从 `rec.genDetailed` 捕获后传入 `pushAndWait`(注意 `pushAndWait` 开头 `clearGen` 会清掉 `genDetailed`,故须先捕获);兜底/权限推送一律 false。普通 meta-prompt summary 压到 ≤120 字(只比原版略详细),详细变体才 ≤400 字+「各选项分别会导致什么」。
 - **INJECTING + 下一次 Stop** → 回 IDLE(那是新的自然停),进入下一轮。
 
 ## 必须遵守的不变量(改动时别破坏)
